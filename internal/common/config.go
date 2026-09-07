@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds application configuration loaded from environment variables.
 type Config struct {
-	HTTPPort    string
-	DatabaseURL string
-	JWTSecret   string
-	WorkerCount int
+	HTTPPort     string
+	DatabaseURL  string
+	JWTSecret    string
+	WorkerCount  int
+	KafkaBrokers []string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -23,10 +25,11 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPPort:    getEnv("NEBULA_HTTP_PORT", "8080"),
-		DatabaseURL: os.Getenv("NEBULA_DATABASE_URL"),
-		JWTSecret:   os.Getenv("NEBULA_JWT_SECRET"),
-		WorkerCount: workerCount,
+		HTTPPort:     getEnv("NEBULA_HTTP_PORT", "8080"),
+		DatabaseURL:  os.Getenv("NEBULA_DATABASE_URL"),
+		JWTSecret:    os.Getenv("NEBULA_JWT_SECRET"),
+		WorkerCount:  workerCount,
+		KafkaBrokers: strings.Split(getEnv("NEBULA_KAFKA_BROKERS", "kafka:9092"), ","),
 	}
 
 	if cfg.DatabaseURL == "" {

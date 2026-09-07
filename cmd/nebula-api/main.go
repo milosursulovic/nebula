@@ -12,11 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	kafka "github.com/segmentio/kafka-go"
+
+	"github.com/milosursulovic/nebula/internal/audit"
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/common"
 	"github.com/milosursulovic/nebula/internal/instance"
 	"github.com/milosursulovic/nebula/internal/job"
 	"github.com/milosursulovic/nebula/internal/node"
+	"github.com/milosursulovic/nebula/internal/outbox"
 	"github.com/milosursulovic/nebula/pkg/api"
 )
 
@@ -73,6 +77,45 @@ func run(logger *slog.Logger) error {
 		jobPool.Run(ctx)
 	}()
 
+	kafkaWriter := &kafka.Writer{
+		Addr:        kafka.TCP(cfg.KafkaBrokers...),
+		Balancer:    &kafka.LeastBytes{},
+		ErrorLogger: kafkaErrorLogger(logger),
+	}
+	defer kafkaWriter.Close()
+
+	kafkaReader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers: cfg.KafkaBrokers,
+		Topic:   outbox.Topic,
+		GroupID: "nebula-audit",
+		// A fresh consumer group (no committed offset yet) starts from the
+		// beginning of the topic rather than only new messages — an audit
+		// trail must not silently skip events published before the
+		// consumer happened to finish joining the group.
+		StartOffset: kafka.FirstOffset,
+		Logger:      kafkaDebugLogger(logger),
+		ErrorLogger: kafkaErrorLogger(logger),
+	})
+	defer kafkaReader.Close()
+
+	outboxRepo := outbox.NewRepository(pool)
+	outboxPublisher := outbox.NewPublisher(outboxRepo, kafkaWriter, logger)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		outboxPublisher.Run(ctx)
+	}()
+
+	auditRepo := audit.NewRepository(pool)
+	auditConsumer := audit.NewConsumer(auditRepo, kafkaReader, logger)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		auditConsumer.Run(ctx)
+	}()
+
 	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, logger)
 
 	errCh := make(chan error, 1)
@@ -100,6 +143,18 @@ func run(logger *slog.Logger) error {
 	wg.Wait()
 	logger.Info("nebula-api stopped cleanly")
 	return nil
+}
+
+func kafkaDebugLogger(logger *slog.Logger) kafka.LoggerFunc {
+	return func(msg string, args ...interface{}) {
+		logger.Debug(fmt.Sprintf(msg, args...))
+	}
+}
+
+func kafkaErrorLogger(logger *slog.Logger) kafka.LoggerFunc {
+	return func(msg string, args ...interface{}) {
+		logger.Error(fmt.Sprintf(msg, args...))
+	}
 }
 
 // createInstanceJobHandler mocks provisioning (spec section 60: "at this

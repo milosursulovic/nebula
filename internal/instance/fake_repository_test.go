@@ -22,7 +22,7 @@ func (f *fakeRepository) newID() string {
 	return fmt.Sprintf("instance-%d", f.nextID)
 }
 
-func (f *fakeRepository) Create(ctx context.Context, in Instance) (Instance, error) {
+func (f *fakeRepository) CreateWithJob(ctx context.Context, in Instance) (Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 

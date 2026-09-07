@@ -7,7 +7,17 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/milosursulovic/nebula/internal/outbox"
 )
+
+// statusEvent maps a target Status to the outbox event spec section 22
+// names for it. Only ONLINE/OFFLINE have named events; DEGRADED/DRAINING
+// stay log-only, as before.
+var statusEvent = map[Status]string{
+	StatusOnline:  outbox.EventNodeOnline,
+	StatusOffline: outbox.EventNodeOffline,
+}
 
 // Repository is the persistence boundary the node Service depends on.
 type Repository interface {
@@ -127,11 +137,21 @@ func (r *pgxRepository) UpdateHeartbeat(ctx context.Context, id string, loadAver
 }
 
 func (r *pgxRepository) UpdateStatus(ctx context.Context, id string, status Status) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE compute_nodes SET status = $2, updated_at = now() WHERE id = $1`,
-		id, status,
-	)
-	return err
+	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`UPDATE compute_nodes SET status = $2, updated_at = now() WHERE id = $1`,
+			id, status,
+		); err != nil {
+			return err
+		}
+
+		if eventType, ok := statusEvent[status]; ok {
+			if _, err := outbox.InsertTx(ctx, tx, eventType, outbox.AggregateNode, id, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *pgxRepository) TryReserve(ctx context.Context, id string, expectedVersion int64, cpu, memoryMB, diskGB int) (Node, bool, error) {

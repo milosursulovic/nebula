@@ -27,8 +27,12 @@ func NewService(repo Repository) Service {
 	return &service{repo: repo}
 }
 
+// Create inserts the instance and atomically enqueues its CREATE_INSTANCE
+// job (see Repository.CreateWithJob) — the caller never enqueues a job
+// separately, which is what closes the non-atomic create-then-enqueue gap
+// Phase 6 left open.
 func (s *service) Create(ctx context.Context, tenantID string, in CreateInput) (Instance, error) {
-	created, err := s.repo.Create(ctx, Instance{
+	created, err := s.repo.CreateWithJob(ctx, Instance{
 		TenantID: tenantID,
 		Name:     in.Name,
 		Status:   StatusPending,

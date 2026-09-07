@@ -93,6 +93,25 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   instance state machine, no real VM); the other 7 job types spec names
   exist in the schema for when networking/storage/start-stop arrive.
 
+**Kafka & the transactional outbox** (`internal/outbox/`, `internal/audit/`)
+- Domain events (`InstanceCreated`, `InstanceProvisioningStarted`,
+  `InstanceProvisioned`, `InstanceProvisioningFailed`, `InstanceDeleted`,
+  `NodeOnline`, `NodeOffline`) are written to an `outbox_events` row in the
+  **same transaction** as the state change that causes them — e.g.
+  `instance.Repository.CreateWithJob` inserts the instance, its outbox
+  event, and its `CREATE_INSTANCE` job row atomically, closing the
+  non-atomic create-then-enqueue gap Phase 6 left open. A separate
+  **outbox publisher** goroutine drains unpublished rows to Kafka and marks
+  them published — the DB write can never succeed while the "event" it
+  implies silently vanishes.
+- **Consumer**: `internal/audit` reads the same events and writes
+  `audit_logs` (`INSTANCE_CREATED`, `NODE_OFFLINE`, ...) via `INSERT ...
+  ON CONFLICT (event_id) DO NOTHING` — idempotent against Kafka's
+  at-least-once redelivery and safe to replay after a restart.
+- Client: `github.com/segmentio/kafka-go` (pure Go, no CGO/librdkafka,
+  matching the existing `CGO_ENABLED=0` build). Compose runs a single-node
+  KRaft `apache/kafka` broker — no separate Zookeeper container.
+
 **Persistence & infra**
 - PostgreSQL via pgx (`internal/common/postgres.go`), SQL migrations via
   `golang-migrate` (`migrations/`).

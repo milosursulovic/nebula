@@ -52,7 +52,7 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 		r.Route("/instances", func(r chi.Router) {
 			r.Use(auth.Authenticate(tokens))
 
-			r.Post("/", handleCreateInstance(instanceSvc, jobSvc, logger))
+			r.Post("/", handleCreateInstance(instanceSvc))
 			r.Get("/", handleListInstances(instanceSvc))
 			r.Get("/{id}", handleGetInstance(instanceSvc))
 			r.Delete("/{id}", handleDeleteInstance(instanceSvc))
