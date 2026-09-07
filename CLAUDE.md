@@ -72,10 +72,21 @@ full section.
 | 5 | Scheduler + resource reservation (4 strategies, optimistic concurrency) | `70e2e3d` |
 | 6 | Jobs (worker pool, retry/backoff, DLQ) | `4ccf7f5` |
 | 7 | Kafka (transactional outbox, audit consumer) | `37860f4` |
+| 8 | Provisioning saga (real scheduling/reservation, compensation) | `5f662c7` |
 
-**Next: Phase 8 — Provisioning Saga** (spec section 62/line 2654). This is
-where the scheduler (Phase 5) and `node.Reserve`/`Release` finally get a
-real caller, with proper compensation on failure.
+**Next: Phase 9 — Nebula Agent** (spec section 63/line 2675).
+
+**Known issue (found during Phase 8 verification, not Phase 8's own bug):**
+the audit Kafka consumer (`internal/audit`, reader wired in
+`cmd/nebula-api/main.go`) can hit `"Unable to establish connection to
+consumer group coordinator... Group Coordinator Not Available"` on a fresh
+`compose up` and then consume **zero** messages indefinitely — unlike the
+job pool/outbox publisher/node monitor, it doesn't appear to self-retry
+the coordinator connection. Reproduced once (~8 min stall, unstuck only
+after an external consumer forced a rebalance); not yet root-caused or
+fixed. Worth a clean re-test (`compose up` -> `migrate up` -> wait a
+minute or two with zero manual Kafka CLI interference) before deciding
+whether it's a slow-retry or a fully wedged reader.
 
 ## Workflow for a new phase
 
