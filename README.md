@@ -52,20 +52,23 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   /api/v1/instances/{id}`, `DELETE /api/v1/instances/{id}` — any
   authenticated tenant member. Create returns immediately with
   `status: "PENDING"` and enqueues a `CREATE_INSTANCE` job; a worker then
-  mock-provisions it (`PENDING → PROVISIONING → RUNNING`) — no KVM yet,
-  see Jobs below.
+  runs the provisioning saga (see below), landing the instance on
+  `RUNNING` with a real `node_id` — or `ERROR` if provisioning failed.
+  Delete releases the instance's reserved node capacity (best-effort) if
+  it had been scheduled onto one.
 - An explicit state machine (`PENDING → PROVISIONING → RUNNING → STOPPING →
   STOPPED`, plus `ERROR`/`DELETING`/`DELETED`) rejects invalid transitions;
-  delete is a soft two-hop `→ DELETING → DELETED`.
+  `ERROR → PROVISIONING` lets a job retry re-enter the saga; delete is a
+  soft two-hop `→ DELETING → DELETED`.
 - Cross-tenant access returns `404`, not `403` (no existence leak).
 
 **Scheduler & resource reservation** (`internal/scheduler/`, `internal/node/`)
 - `Scheduler` interface with four strategies — FirstFit, BestFit
   (tightest normalized leftover capacity), LeastLoaded, and Weighted
   (`cpu*0.30 + memory*0.30 + disk*0.15 + load*0.15 + instances*0.10`) — only
-  considering `ONLINE` nodes with enough capacity. Still not called by
-  instance creation (see Jobs below for why) — that wiring, with proper
-  reserve/compensate semantics, arrives with the provisioning saga.
+  considering `ONLINE` nodes with enough capacity. Selected via
+  `NEBULA_SCHEDULER_STRATEGY` (default `weighted`) and driven by the
+  provisioning saga on every instance create.
 - `node.Service.Reserve`/`Release` do transactional capacity accounting on
   `compute_nodes` via optimistic concurrency (a `version` column, retried
   with jittered backoff on conflict) — never a `SELECT ... FOR UPDATE`
@@ -75,6 +78,20 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   Postgres (gated on `NEBULA_DATABASE_URL`, skipped otherwise): available
   capacity never goes negative and every request resolves to success or a
   legitimate rejection.
+
+**Provisioning saga** (`internal/provisioning/`)
+- Drives each `CREATE_INSTANCE` job attempt through: schedule a node →
+  reserve its capacity → set `node_id` → create disk → create network →
+  create VM → start VM → transition to `RUNNING`. Disk/network/VM steps
+  are mocked (simulated work, always succeed) — real implementations are
+  Phase 12 (Networking) and Phase 13 (Storage)'s job; resource reservation
+  is real.
+- Any step's failure compensates in reverse order — exactly the spec's
+  worked example: create VM fails → delete network → delete disk →
+  release reservation — then transitions the instance to `ERROR`. A job
+  retry re-invokes the saga from scratch, re-scheduling fresh (possibly
+  onto a different node) rather than assuming the prior choice still
+  holds.
 
 **Jobs** (`internal/job/`)
 - A channel-based worker pool (dispatcher goroutine polls PostgreSQL for
@@ -89,9 +106,9 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   budget) — `RequireRole(SUPER_ADMIN)`, same as nodes.
 - On startup, any job still `RUNNING` is requeued — with one worker-pool
   process, that can only mean an orphaned job from a crashed prior run.
-- Only `CREATE_INSTANCE` has a registered handler (a mock: it drives the
-  instance state machine, no real VM); the other 7 job types spec names
-  exist in the schema for when networking/storage/start-stop arrive.
+- Only `CREATE_INSTANCE` has a registered handler — it drives the
+  provisioning saga above; the other 7 job types spec names exist in the
+  schema for when networking/storage/start-stop arrive.
 
 **Kafka & the transactional outbox** (`internal/outbox/`, `internal/audit/`)
 - Domain events (`InstanceCreated`, `InstanceProvisioningStarted`,

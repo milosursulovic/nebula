@@ -34,6 +34,14 @@ func TestCanTransitionDeletingReachableFromLiveStates(t *testing.T) {
 	}
 }
 
+func TestCanTransitionErrorToProvisioningForRetry(t *testing.T) {
+	// Phase 8: a job retry re-runs the saga on a failed instance, and the
+	// saga's first step transitions into PROVISIONING.
+	if !CanTransition(StatusError, StatusProvisioning) {
+		t.Error("CanTransition(ERROR, PROVISIONING) = false, want true")
+	}
+}
+
 func TestCanTransitionRejectsArbitraryJumps(t *testing.T) {
 	tests := []struct{ from, to Status }{
 		{StatusPending, StatusRunning},

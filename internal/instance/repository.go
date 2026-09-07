@@ -50,6 +50,12 @@ type Repository interface {
 	// tenant, or is no longer in the `from` status (a concurrent change
 	// raced it).
 	TransitionState(ctx context.Context, tenantID, id string, from, to Status) (Instance, error)
+
+	// SetNodeID records which node the saga reserved for this instance.
+	// Not a state transition (no outbox event of its own — the Transition
+	// calls around it already fire the real ones); guarded to only apply
+	// while PROVISIONING. Returns errNoRows if that guard fails.
+	SetNodeID(ctx context.Context, tenantID, id, nodeID string) (Instance, error)
 }
 
 type pgxRepository struct {
@@ -171,6 +177,20 @@ func (r *pgxRepository) TransitionState(ctx context.Context, tenantID, id string
 		return Instance{}, err
 	}
 	return updated, nil
+}
+
+func (r *pgxRepository) SetNodeID(ctx context.Context, tenantID, id, nodeID string) (Instance, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE instances SET node_id = $3, updated_at = now()
+		WHERE id = $1 AND tenant_id = $2 AND status = 'PROVISIONING'
+		RETURNING `+selectColumns,
+		id, tenantID, nodeID,
+	)
+	i, err := scanInstance(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Instance{}, errNoRows
+	}
+	return i, err
 }
 
 func isUniqueViolation(err error) bool {

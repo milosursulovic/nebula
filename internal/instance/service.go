@@ -17,6 +17,10 @@ type Service interface {
 	// ErrInvalidTransition otherwise. This is the primitive the job
 	// worker uses to drive PENDING -> PROVISIONING -> RUNNING.
 	Transition(ctx context.Context, tenantID, id string, to Status) (Instance, error)
+
+	// SetNodeID records the node the provisioning saga reserved for this
+	// instance. See Repository.SetNodeID.
+	SetNodeID(ctx context.Context, tenantID, id, nodeID string) (Instance, error)
 }
 
 type service struct {
@@ -91,4 +95,12 @@ func (s *service) Transition(ctx context.Context, tenantID, id string, to Status
 	}
 
 	return updated, nil
+}
+
+func (s *service) SetNodeID(ctx context.Context, tenantID, id, nodeID string) (Instance, error) {
+	updated, err := s.repo.SetNodeID(ctx, tenantID, id, nodeID)
+	if errors.Is(err, errNoRows) {
+		return Instance{}, ErrInvalidTransition // not PROVISIONING (or wrong tenant/missing)
+	}
+	return updated, err
 }

@@ -17,16 +17,17 @@ const (
 )
 
 // allowedTransitions is the explicit state transition graph (spec section
-// 13: "Do not allow arbitrary transitions"). Only PENDING<->DELETING and
-// DELETING->DELETED are reachable through Phase 4's own endpoints; the rest
-// exist for the scheduler/worker to drive once they exist.
+// 13: "Do not allow arbitrary transitions"). ERROR->PROVISIONING (Phase 8)
+// is what lets a job retry re-run the provisioning saga on an instance that
+// failed a previous attempt — the saga always transitions into PROVISIONING
+// as its first step, before scheduling, so a retry needs a way back in.
 var allowedTransitions = map[Status][]Status{
 	StatusPending:      {StatusProvisioning, StatusDeleting},
 	StatusProvisioning: {StatusRunning, StatusError},
 	StatusRunning:      {StatusStopping, StatusDeleting},
 	StatusStopping:     {StatusStopped, StatusError},
 	StatusStopped:      {StatusRunning, StatusDeleting},
-	StatusError:        {StatusDeleting},
+	StatusError:        {StatusDeleting, StatusProvisioning},
 	StatusDeleting:     {StatusDeleted},
 	StatusDeleted:      {},
 }

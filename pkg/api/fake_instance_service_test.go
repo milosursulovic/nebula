@@ -13,6 +13,7 @@ type fakeInstanceService struct {
 	getFn        func(ctx context.Context, tenantID, id string) (instance.Instance, error)
 	deleteFn     func(ctx context.Context, tenantID, id string) (instance.Instance, error)
 	transitionFn func(ctx context.Context, tenantID, id string, to instance.Status) (instance.Instance, error)
+	setNodeIDFn  func(ctx context.Context, tenantID, id, nodeID string) (instance.Instance, error)
 }
 
 func (f fakeInstanceService) Create(ctx context.Context, tenantID string, in instance.CreateInput) (instance.Instance, error) {
@@ -33,4 +34,8 @@ func (f fakeInstanceService) Delete(ctx context.Context, tenantID, id string) (i
 
 func (f fakeInstanceService) Transition(ctx context.Context, tenantID, id string, to instance.Status) (instance.Instance, error) {
 	return f.transitionFn(ctx, tenantID, id, to)
+}
+
+func (f fakeInstanceService) SetNodeID(ctx context.Context, tenantID, id, nodeID string) (instance.Instance, error) {
+	return f.setNodeIDFn(ctx, tenantID, id, nodeID)
 }

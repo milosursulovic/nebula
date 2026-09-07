@@ -21,6 +21,8 @@ import (
 	"github.com/milosursulovic/nebula/internal/job"
 	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/internal/outbox"
+	"github.com/milosursulovic/nebula/internal/provisioning"
+	"github.com/milosursulovic/nebula/internal/scheduler"
 	"github.com/milosursulovic/nebula/pkg/api"
 )
 
@@ -66,10 +68,16 @@ func run(logger *slog.Logger) error {
 	instanceRepo := instance.NewRepository(pool)
 	instanceSvc := instance.NewService(instanceRepo)
 
+	schedulerSvc, err := scheduler.NewScheduler(cfg.SchedulerStrategy, nodeRepo)
+	if err != nil {
+		return err
+	}
+	saga := provisioning.NewSaga(instanceSvc, nodeSvc, schedulerSvc, logger)
+
 	jobRepo := job.NewRepository(pool)
 	jobSvc := job.NewService(jobRepo)
 	jobPool := job.NewPool(jobRepo, logger, cfg.WorkerCount)
-	jobPool.RegisterHandler(job.TypeCreateInstance, createInstanceJobHandler(instanceSvc))
+	jobPool.RegisterHandler(job.TypeCreateInstance, createInstanceJobHandler(saga))
 
 	wg.Add(1)
 	go func() {
@@ -157,12 +165,10 @@ func kafkaErrorLogger(logger *slog.Logger) kafka.LoggerFunc {
 	}
 }
 
-// createInstanceJobHandler mocks provisioning (spec section 60: "at this
-// stage provisioning can still use mocks") by driving the instance state
-// machine PENDING -> PROVISIONING -> RUNNING with a simulated delay. It does
-// not touch the scheduler/node reservation — see the Phase 6 plan for why
-// that's deliberately deferred to the provisioning saga phase.
-func createInstanceJobHandler(instanceSvc instance.Service) job.Handler {
+// createInstanceJobHandler adapts a CREATE_INSTANCE job to the provisioning
+// saga (spec section 62): schedule a node, reserve resources, create disk,
+// create network, create VM, start VM — compensating in reverse on failure.
+func createInstanceJobHandler(saga *provisioning.Saga) job.Handler {
 	return func(ctx context.Context, j job.Job) error {
 		if j.InstanceID == nil {
 			return fmt.Errorf("CREATE_INSTANCE job %s has no instance_id", j.ID)
@@ -172,19 +178,6 @@ func createInstanceJobHandler(instanceSvc instance.Service) job.Handler {
 			tenantID = *j.TenantID
 		}
 
-		if _, err := instanceSvc.Transition(ctx, tenantID, *j.InstanceID, instance.StatusProvisioning); err != nil {
-			return fmt.Errorf("transition to PROVISIONING: %w", err)
-		}
-
-		select {
-		case <-time.After(300 * time.Millisecond): // simulated provisioning work
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		if _, err := instanceSvc.Transition(ctx, tenantID, *j.InstanceID, instance.StatusRunning); err != nil {
-			return fmt.Errorf("transition to RUNNING: %w", err)
-		}
-		return nil
+		return saga.Provision(ctx, tenantID, *j.InstanceID)
 	}
 }

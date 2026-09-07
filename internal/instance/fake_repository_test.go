@@ -77,3 +77,18 @@ func (f *fakeRepository) TransitionState(ctx context.Context, tenantID, id strin
 	f.instances[id] = i
 	return i, nil
 }
+
+func (f *fakeRepository) SetNodeID(ctx context.Context, tenantID, id, nodeID string) (Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	i, ok := f.instances[id]
+	if !ok || i.TenantID != tenantID || i.Status != StatusProvisioning {
+		return Instance{}, errNoRows
+	}
+
+	i.NodeID = &nodeID
+	i.UpdatedAt = time.Now()
+	f.instances[id] = i
+	return i, nil
+}

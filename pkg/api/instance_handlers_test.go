@@ -8,6 +8,7 @@ import (
 
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/instance"
+	"github.com/milosursulovic/nebula/internal/node"
 )
 
 func newInstanceTestServer(instanceSvc instance.Service) (*http.Server, auth.TokenIssuer) {
@@ -169,5 +170,35 @@ func TestHandleDeleteInstanceInvalidTransition(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
+func TestHandleDeleteInstanceReleasesNodeCapacity(t *testing.T) {
+	nodeID := "node-1"
+	instanceSvc := fakeInstanceService{
+		deleteFn: func(ctx context.Context, tenantID, id string) (instance.Instance, error) {
+			return instance.Instance{ID: id, Status: instance.StatusDeleted, CPU: 2, MemoryMB: 4096, DiskGB: 50, NodeID: &nodeID}, nil
+		},
+	}
+	released := false
+	nodeSvc := fakeNodeService{
+		releaseFn: func(ctx context.Context, id string, cpu, memoryMB, diskGB int) (node.Node, error) {
+			released = true
+			if id != nodeID || cpu != 2 || memoryMB != 4096 || diskGB != 50 {
+				t.Fatalf("unexpected release args: id=%q cpu=%d memoryMB=%d diskGB=%d", id, cpu, memoryMB, diskGB)
+			}
+			return node.Node{ID: nodeID}, nil
+		},
+	}
+	tokens := testTokenIssuer()
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, testLogger())
+
+	rec := doJSON(t, srv, http.MethodDelete, "/api/v1/instances/inst-1", nil, userAuthHeader(t, tokens, "tenant-1"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !released {
+		t.Error("expected nodeSvc.Release to be called when deleted instance had a NodeID")
 	}
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/instance"
+	"github.com/milosursulovic/nebula/internal/node"
 )
 
 type createInstanceRequest struct {
@@ -132,7 +134,7 @@ func handleGetInstance(svc instance.Service) http.HandlerFunc {
 	}
 }
 
-func handleDeleteInstance(svc instance.Service) http.HandlerFunc {
+func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -154,6 +156,19 @@ func handleDeleteInstance(svc instance.Service) http.HandlerFunc {
 			}
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to delete instance")
 			return
+		}
+
+		// The provisioning saga (Phase 8) may have reserved real node
+		// capacity for this instance — release it now that it's deleted.
+		// Best-effort: the instance is already gone either way; a failure
+		// here leaks reserved capacity rather than blocking the delete
+		// (same shape as the create/job-enqueue gap Phase 6 left and
+		// Phase 7 later closed properly via the outbox).
+		if deleted.NodeID != nil {
+			if _, err := nodeSvc.Release(r.Context(), *deleted.NodeID, deleted.CPU, deleted.MemoryMB, deleted.DiskGB); err != nil {
+				logger.Error("failed to release node capacity after instance delete",
+					"instance_id", deleted.ID, "node_id", *deleted.NodeID, "error", err)
+			}
 		}
 
 		writeJSON(w, http.StatusOK, newInstanceResponse(deleted))
