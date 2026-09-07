@@ -58,6 +58,22 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   delete is a soft two-hop `→ DELETING → DELETED`.
 - Cross-tenant access returns `404`, not `403` (no existence leak).
 
+**Scheduler & resource reservation** (`internal/scheduler/`, `internal/node/`)
+- `Scheduler` interface with four strategies — FirstFit, BestFit
+  (tightest normalized leftover capacity), LeastLoaded, and Weighted
+  (`cpu*0.30 + memory*0.30 + disk*0.15 + load*0.15 + instances*0.10`) — only
+  considering `ONLINE` nodes with enough capacity. Not wired into instance
+  creation yet; that arrives with the job worker.
+- `node.Service.Reserve`/`Release` do transactional capacity accounting on
+  `compute_nodes` via optimistic concurrency (a `version` column, retried
+  with jittered backoff on conflict) — never a `SELECT ... FOR UPDATE`
+  lock, matching the worked example in the spec.
+- The mandatory 100-concurrent-request test
+  (`internal/node/reserve_concurrency_test.go`) proves this against a real
+  Postgres (gated on `NEBULA_DATABASE_URL`, skipped otherwise): available
+  capacity never goes negative and every request resolves to success or a
+  legitimate rejection.
+
 **Persistence & infra**
 - PostgreSQL via pgx (`internal/common/postgres.go`), SQL migrations via
   `golang-migrate` (`migrations/`).

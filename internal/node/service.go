@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand"
 	"time"
 
 	"github.com/milosursulovic/nebula/internal/common"
@@ -26,6 +27,31 @@ type Service interface {
 	// AuthenticateNodeToken resolves a raw node token to its node ID, or
 	// ErrInvalidNodeToken if the token is unknown or doesn't match id.
 	AuthenticateNodeToken(ctx context.Context, id, rawToken string) error
+
+	// Reserve decrements a node's available capacity (spec section 16:
+	// AVAILABLE -> RESERVED), retrying on optimistic-concurrency conflicts.
+	// Returns ErrInsufficientCapacity if the node can't fit the request at
+	// all, or ErrReservationConflict if retries are exhausted.
+	Reserve(ctx context.Context, id string, cpu, memoryMB, diskGB int) (Node, error)
+
+	// Release increments a node's available capacity back (spec section
+	// 16: RESERVED -> AVAILABLE on failure), retrying on conflicts.
+	Release(ctx context.Context, id string, cpu, memoryMB, diskGB int) (Node, error)
+}
+
+// maxReservationRetries bounds the optimistic-concurrency retry loop for
+// Reserve/Release (spec section 17's "must retry scheduling" example). Set
+// high enough that heavy contention (spec section 19's 100 concurrent
+// requests against one node) resolves every request to a real outcome
+// (success or ErrInsufficientCapacity) rather than exhausting retries.
+const maxReservationRetries = 50
+
+// reservationRetryBackoff adds jitter between optimistic-concurrency retry
+// attempts (same idea as spec section 24's retry system: "add jitter to
+// avoid synchronized retries") so many goroutines racing the same row's
+// version don't all retry in lockstep.
+func reservationRetryBackoff() {
+	time.Sleep(time.Duration(rand.Intn(3)) * time.Millisecond)
 }
 
 type service struct {
@@ -89,6 +115,56 @@ func (s *service) Heartbeat(ctx context.Context, id string, in HeartbeatInput) e
 		"running_instances", in.RunningInstances,
 	)
 	return nil
+}
+
+func (s *service) Reserve(ctx context.Context, id string, cpu, memoryMB, diskGB int) (Node, error) {
+	for attempt := 0; attempt < maxReservationRetries; attempt++ {
+		if attempt > 0 {
+			reservationRetryBackoff()
+		}
+
+		current, err := s.Get(ctx, id)
+		if err != nil {
+			return Node{}, err
+		}
+
+		if current.AvailableCPU < cpu || current.AvailableMemoryMB < memoryMB || current.AvailableDiskGB < diskGB {
+			return Node{}, ErrInsufficientCapacity
+		}
+
+		updated, ok, err := s.repo.TryReserve(ctx, id, current.Version, cpu, memoryMB, diskGB)
+		if err != nil {
+			return Node{}, err
+		}
+		if ok {
+			return updated, nil
+		}
+		// Version changed concurrently; re-read and retry.
+	}
+	return Node{}, ErrReservationConflict
+}
+
+func (s *service) Release(ctx context.Context, id string, cpu, memoryMB, diskGB int) (Node, error) {
+	for attempt := 0; attempt < maxReservationRetries; attempt++ {
+		if attempt > 0 {
+			reservationRetryBackoff()
+		}
+
+		current, err := s.Get(ctx, id)
+		if err != nil {
+			return Node{}, err
+		}
+
+		updated, ok, err := s.repo.TryRelease(ctx, id, current.Version, cpu, memoryMB, diskGB)
+		if err != nil {
+			return Node{}, err
+		}
+		if ok {
+			return updated, nil
+		}
+		// Version changed concurrently; re-read and retry.
+	}
+	return Node{}, ErrReservationConflict
 }
 
 func (s *service) AuthenticateNodeToken(ctx context.Context, id, rawToken string) error {

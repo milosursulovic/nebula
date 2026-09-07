@@ -104,3 +104,37 @@ func (f *fakeRepository) UpdateStatus(ctx context.Context, id string, status Sta
 	f.nodes[id] = n
 	return nil
 }
+
+func (f *fakeRepository) TryReserve(ctx context.Context, id string, expectedVersion int64, cpu, memoryMB, diskGB int) (Node, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	n, ok := f.nodes[id]
+	if !ok || n.Version != expectedVersion {
+		return Node{}, false, nil
+	}
+	n.AvailableCPU -= cpu
+	n.AvailableMemoryMB -= memoryMB
+	n.AvailableDiskGB -= diskGB
+	n.Version++
+	n.UpdatedAt = time.Now()
+	f.nodes[id] = n
+	return n, true, nil
+}
+
+func (f *fakeRepository) TryRelease(ctx context.Context, id string, expectedVersion int64, cpu, memoryMB, diskGB int) (Node, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	n, ok := f.nodes[id]
+	if !ok || n.Version != expectedVersion {
+		return Node{}, false, nil
+	}
+	n.AvailableCPU += cpu
+	n.AvailableMemoryMB += memoryMB
+	n.AvailableDiskGB += diskGB
+	n.Version++
+	n.UpdatedAt = time.Now()
+	f.nodes[id] = n
+	return n, true, nil
+}

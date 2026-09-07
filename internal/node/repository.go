@@ -21,6 +21,16 @@ type Repository interface {
 
 	// UpdateStatus persists only a status transition (used by the monitor).
 	UpdateStatus(ctx context.Context, id string, status Status) error
+
+	// TryReserve attempts a single compare-and-swap capacity decrement,
+	// guarded by expectedVersion (spec section 17's optimistic concurrency
+	// example). ok=false with a nil error means the version no longer
+	// matched (a concurrent writer got there first) — the caller re-reads
+	// and retries; it does not check capacity itself.
+	TryReserve(ctx context.Context, id string, expectedVersion int64, cpu, memoryMB, diskGB int) (Node, bool, error)
+
+	// TryRelease is the symmetric compare-and-swap capacity increment.
+	TryRelease(ctx context.Context, id string, expectedVersion int64, cpu, memoryMB, diskGB int) (Node, bool, error)
 }
 
 type pgxRepository struct {
@@ -33,14 +43,14 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 
 const selectColumns = `id, hostname, ip, status, total_cpu, available_cpu,
 	total_memory_mb, available_memory_mb, total_disk_gb, available_disk_gb,
-	load_average, running_instances, last_heartbeat_at, token_hash, created_at, updated_at`
+	load_average, running_instances, last_heartbeat_at, token_hash, version, created_at, updated_at`
 
 func scanNode(row pgx.Row) (Node, error) {
 	var n Node
 	err := row.Scan(
 		&n.ID, &n.Hostname, &n.IP, &n.Status, &n.TotalCPU, &n.AvailableCPU,
 		&n.TotalMemoryMB, &n.AvailableMemoryMB, &n.TotalDiskGB, &n.AvailableDiskGB,
-		&n.LoadAverage, &n.RunningInstances, &n.LastHeartbeatAt, &n.TokenHash,
+		&n.LoadAverage, &n.RunningInstances, &n.LastHeartbeatAt, &n.TokenHash, &n.Version,
 		&n.CreatedAt, &n.UpdatedAt,
 	)
 	return n, err
@@ -122,6 +132,50 @@ func (r *pgxRepository) UpdateStatus(ctx context.Context, id string, status Stat
 		id, status,
 	)
 	return err
+}
+
+func (r *pgxRepository) TryReserve(ctx context.Context, id string, expectedVersion int64, cpu, memoryMB, diskGB int) (Node, bool, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE compute_nodes
+		SET available_cpu = available_cpu - $3,
+		    available_memory_mb = available_memory_mb - $4,
+		    available_disk_gb = available_disk_gb - $5,
+		    version = version + 1,
+		    updated_at = now()
+		WHERE id = $1 AND version = $2
+		RETURNING `+selectColumns,
+		id, expectedVersion, cpu, memoryMB, diskGB,
+	)
+	n, err := scanNode(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Node{}, false, nil
+	}
+	if err != nil {
+		return Node{}, false, err
+	}
+	return n, true, nil
+}
+
+func (r *pgxRepository) TryRelease(ctx context.Context, id string, expectedVersion int64, cpu, memoryMB, diskGB int) (Node, bool, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE compute_nodes
+		SET available_cpu = available_cpu + $3,
+		    available_memory_mb = available_memory_mb + $4,
+		    available_disk_gb = available_disk_gb + $5,
+		    version = version + 1,
+		    updated_at = now()
+		WHERE id = $1 AND version = $2
+		RETURNING `+selectColumns,
+		id, expectedVersion, cpu, memoryMB, diskGB,
+	)
+	n, err := scanNode(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Node{}, false, nil
+	}
+	if err != nil {
+		return Node{}, false, err
+	}
+	return n, true, nil
 }
 
 func isUniqueViolation(err error) bool {

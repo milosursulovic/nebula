@@ -34,6 +34,7 @@ type Node struct {
 	RunningInstances  int
 	LastHeartbeatAt   *time.Time
 	TokenHash         string
+	Version           int64
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
