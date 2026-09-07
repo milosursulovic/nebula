@@ -23,6 +23,7 @@ services:
       NEBULA_HTTP_PORT: "8080"
       NEBULA_DATABASE_URL: "postgres://nebula:nebula@postgres:5432/nebula?sslmode=disable"
       NEBULA_JWT_SECRET: "dev-only-secret-change-me"
+      NEBULA_WORKER_COUNT: "3"
     ports:
       - "8080:8080"
     depends_on:

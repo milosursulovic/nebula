@@ -12,7 +12,7 @@ import (
 
 func newInstanceTestServer(instanceSvc instance.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, testLogger()), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, testLogger()), tokens
 }
 
 func userAuthHeader(t *testing.T, tokens auth.TokenIssuer, tenantID string) map[string]string {

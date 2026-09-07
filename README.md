@@ -51,8 +51,9 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 - `POST /api/v1/instances`, `GET /api/v1/instances`, `GET
   /api/v1/instances/{id}`, `DELETE /api/v1/instances/{id}` — any
   authenticated tenant member. Create returns immediately with
-  `status: "PENDING"`; provisioning is not yet wired up (no scheduler/worker
-  exists), so instances stay virtual records for now — no KVM.
+  `status: "PENDING"` and enqueues a `CREATE_INSTANCE` job; a worker then
+  mock-provisions it (`PENDING → PROVISIONING → RUNNING`) — no KVM yet,
+  see Jobs below.
 - An explicit state machine (`PENDING → PROVISIONING → RUNNING → STOPPING →
   STOPPED`, plus `ERROR`/`DELETING`/`DELETED`) rejects invalid transitions;
   delete is a soft two-hop `→ DELETING → DELETED`.
@@ -62,8 +63,9 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 - `Scheduler` interface with four strategies — FirstFit, BestFit
   (tightest normalized leftover capacity), LeastLoaded, and Weighted
   (`cpu*0.30 + memory*0.30 + disk*0.15 + load*0.15 + instances*0.10`) — only
-  considering `ONLINE` nodes with enough capacity. Not wired into instance
-  creation yet; that arrives with the job worker.
+  considering `ONLINE` nodes with enough capacity. Still not called by
+  instance creation (see Jobs below for why) — that wiring, with proper
+  reserve/compensate semantics, arrives with the provisioning saga.
 - `node.Service.Reserve`/`Release` do transactional capacity accounting on
   `compute_nodes` via optimistic concurrency (a `version` column, retried
   with jittered backoff on conflict) — never a `SELECT ... FOR UPDATE`
@@ -73,6 +75,23 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   Postgres (gated on `NEBULA_DATABASE_URL`, skipped otherwise): available
   capacity never goes negative and every request resolves to success or a
   legitimate rejection.
+
+**Jobs** (`internal/job/`)
+- A channel-based worker pool (dispatcher goroutine polls PostgreSQL for
+  due `QUEUED` jobs, claims one via `SELECT ... FOR UPDATE SKIP LOCKED`,
+  fans it out to `NEBULA_WORKER_COUNT` — default 3 — worker goroutines).
+- Exponential backoff with jitter on failure (1s/2s/4s/8s/16s, spec's
+  table) via a durable `next_attempt_at` column — no in-process sleep
+  timers, survives a restart. After 5 attempts a job is `FAILED` — that
+  status **is** the dead letter queue, no separate table.
+- `GET /api/v1/jobs` (optional `?status=`), `GET /api/v1/jobs/{id}`,
+  `POST /api/v1/jobs/{id}/retry` (`FAILED → QUEUED`, fresh attempt
+  budget) — `RequireRole(SUPER_ADMIN)`, same as nodes.
+- On startup, any job still `RUNNING` is requeued — with one worker-pool
+  process, that can only mean an orphaned job from a crashed prior run.
+- Only `CREATE_INSTANCE` has a registered handler (a mock: it drives the
+  instance state machine, no real VM); the other 7 job types spec names
+  exist in the schema for when networking/storage/start-stop arrive.
 
 **Persistence & infra**
 - PostgreSQL via pgx (`internal/common/postgres.go`), SQL migrations via

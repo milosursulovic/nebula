@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/instance"
+	"github.com/milosursulovic/nebula/internal/job"
 )
 
 type createInstanceRequest struct {
@@ -44,7 +46,7 @@ func newInstanceResponse(i instance.Instance) instanceResponse {
 	}
 }
 
-func handleCreateInstance(svc instance.Service) http.HandlerFunc {
+func handleCreateInstance(svc instance.Service, jobSvc job.Service, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -76,6 +78,17 @@ func handleCreateInstance(svc instance.Service) http.HandlerFunc {
 			}
 			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create instance")
 			return
+		}
+
+		// Provisioning is asynchronous (spec section 14): the instance is
+		// already created and returned; a worker picks up this job to
+		// actually drive it out of PENDING. Enqueueing is a second,
+		// non-atomic write — if it fails the instance still exists (and is
+		// returned below) but is stuck in PENDING with no job. That gap is
+		// closed properly by the transactional outbox (a later phase); for
+		// now it's logged loudly rather than silently swallowed.
+		if _, err := jobSvc.Enqueue(r.Context(), job.TypeCreateInstance, &identity.TenantID, &created.ID); err != nil {
+			logger.Error("failed to enqueue CREATE_INSTANCE job", "instance_id", created.ID, "error", err)
 		}
 
 		writeJSON(w, http.StatusCreated, newInstanceResponse(created))

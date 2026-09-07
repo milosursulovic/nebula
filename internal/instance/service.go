@@ -11,6 +11,12 @@ type Service interface {
 	List(ctx context.Context, tenantID string) ([]Instance, error)
 	Get(ctx context.Context, tenantID, id string) (Instance, error)
 	Delete(ctx context.Context, tenantID, id string) (Instance, error)
+
+	// Transition moves an instance to the given status if the state
+	// machine allows it from its current status, returning
+	// ErrInvalidTransition otherwise. This is the primitive the job
+	// worker uses to drive PENDING -> PROVISIONING -> RUNNING.
+	Transition(ctx context.Context, tenantID, id string, to Status) (Instance, error)
 }
 
 type service struct {
@@ -50,9 +56,16 @@ func (s *service) Get(ctx context.Context, tenantID, id string) (Instance, error
 }
 
 // Delete soft-deletes an instance: PENDING/RUNNING/STOPPED/ERROR -> DELETING
-// -> DELETED, applied synchronously since no job worker exists yet to do it
-// asynchronously (spec section 58: instances are virtual records this phase).
+// -> DELETED, applied synchronously (there's no job type for it yet — spec
+// section 60's job system covers instance creation, not deletion).
 func (s *service) Delete(ctx context.Context, tenantID, id string) (Instance, error) {
+	if _, err := s.Transition(ctx, tenantID, id, StatusDeleting); err != nil {
+		return Instance{}, err
+	}
+	return s.Transition(ctx, tenantID, id, StatusDeleted)
+}
+
+func (s *service) Transition(ctx context.Context, tenantID, id string, to Status) (Instance, error) {
 	current, err := s.repo.Get(ctx, tenantID, id)
 	if err != nil {
 		if errors.Is(err, errNoRows) {
@@ -61,24 +74,17 @@ func (s *service) Delete(ctx context.Context, tenantID, id string) (Instance, er
 		return Instance{}, err
 	}
 
-	if !CanTransition(current.Status, StatusDeleting) {
+	if !CanTransition(current.Status, to) {
 		return Instance{}, ErrInvalidTransition
 	}
 
-	if _, err := s.repo.TransitionState(ctx, tenantID, id, current.Status, StatusDeleting); err != nil {
+	updated, err := s.repo.TransitionState(ctx, tenantID, id, current.Status, to)
+	if err != nil {
 		if errors.Is(err, errNoRows) {
 			return Instance{}, ErrInvalidTransition // status changed concurrently
 		}
 		return Instance{}, err
 	}
 
-	deleted, err := s.repo.TransitionState(ctx, tenantID, id, StatusDeleting, StatusDeleted)
-	if err != nil {
-		if errors.Is(err, errNoRows) {
-			return Instance{}, ErrInvalidTransition
-		}
-		return Instance{}, err
-	}
-
-	return deleted, nil
+	return updated, nil
 }

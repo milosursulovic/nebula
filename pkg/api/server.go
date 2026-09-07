@@ -10,11 +10,12 @@ import (
 
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/instance"
+	"github.com/milosursulovic/nebula/internal/job"
 	"github.com/milosursulovic/nebula/internal/node"
 )
 
 // NewServer builds the nebula-api HTTP server: router, middleware, and routes.
-func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, logger *slog.Logger) *http.Server {
+func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, logger *slog.Logger) *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -51,10 +52,19 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 		r.Route("/instances", func(r chi.Router) {
 			r.Use(auth.Authenticate(tokens))
 
-			r.Post("/", handleCreateInstance(instanceSvc))
+			r.Post("/", handleCreateInstance(instanceSvc, jobSvc, logger))
 			r.Get("/", handleListInstances(instanceSvc))
 			r.Get("/{id}", handleGetInstance(instanceSvc))
 			r.Delete("/{id}", handleDeleteInstance(instanceSvc))
+		})
+
+		r.Route("/jobs", func(r chi.Router) {
+			r.Use(auth.Authenticate(tokens))
+			r.Use(auth.RequireRole(auth.RoleSuperAdmin))
+
+			r.Get("/", handleListJobs(jobSvc))
+			r.Get("/{id}", handleGetJob(jobSvc))
+			r.Post("/{id}/retry", handleRetryJob(jobSvc))
 		})
 	})
 
