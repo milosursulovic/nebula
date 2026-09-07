@@ -13,7 +13,7 @@ import (
 
 func newInstanceTestServer(instanceSvc instance.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, testLogger()), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, noopDeleteVM, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func userAuthHeader(t *testing.T, tokens auth.TokenIssuer, tenantID string) map[string]string {
@@ -190,8 +190,17 @@ func TestHandleDeleteInstanceReleasesNodeCapacity(t *testing.T) {
 			return node.Node{ID: nodeID}, nil
 		},
 	}
+	vmDeleted := false
+	deleteVM := func(ctx context.Context, instanceID, nid string) error {
+		vmDeleted = true
+		if instanceID != "inst-1" || nid != nodeID {
+			t.Fatalf("unexpected deleteVM args: instanceID=%q nodeID=%q", instanceID, nid)
+		}
+		return nil
+	}
+
 	tokens := testTokenIssuer()
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, testLogger())
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, deleteVM, testLogger(), testNodeBootstrapSecret)
 
 	rec := doJSON(t, srv, http.MethodDelete, "/api/v1/instances/inst-1", nil, userAuthHeader(t, tokens, "tenant-1"))
 
@@ -200,5 +209,8 @@ func TestHandleDeleteInstanceReleasesNodeCapacity(t *testing.T) {
 	}
 	if !released {
 		t.Error("expected nodeSvc.Release to be called when deleted instance had a NodeID")
+	}
+	if !vmDeleted {
+		t.Error("expected deleteVM to be called when deleted instance had a NodeID")
 	}
 }

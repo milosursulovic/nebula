@@ -72,7 +72,13 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	saga := provisioning.NewSaga(instanceSvc, nodeSvc, schedulerSvc, logger)
+	mockSteps := provisioning.NewMockSteps(logger)
+	agentSteps := provisioning.NewAgentSteps(nodeSvc, cfg.AgentPort, logger)
+	saga := provisioning.NewSagaWithSteps(instanceSvc, nodeSvc, schedulerSvc, logger, provisioning.Steps{
+		CreateDisk: mockSteps.CreateDisk, DeleteDisk: mockSteps.DeleteDisk,
+		CreateNetwork: mockSteps.CreateNetwork, DeleteNetwork: mockSteps.DeleteNetwork,
+		CreateVM: agentSteps.CreateVM, DeleteVM: agentSteps.DeleteVM, StartVM: agentSteps.StartVM,
+	})
 
 	jobRepo := job.NewRepository(pool)
 	jobSvc := job.NewService(jobRepo)
@@ -124,7 +130,7 @@ func run(logger *slog.Logger) error {
 		auditConsumer.Run(ctx)
 	}()
 
-	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, logger)
+	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, agentSteps.DeleteVM, logger, cfg.NodeBootstrapSecret)
 
 	errCh := make(chan error, 1)
 	go func() {

@@ -6,6 +6,7 @@ COMPOSE_FILE := deployments/compose/docker-compose.yml
 
 build:
 	go build -o bin/nebula-api ./cmd/nebula-api
+	go build -o bin/nebula-agent ./cmd/nebula-agent
 
 run: build
 	NEBULA_DATABASE_URL=$(DATABASE_URL) NEBULA_JWT_SECRET=$(JWT_SECRET) ./bin/nebula-api

@@ -12,7 +12,7 @@ import (
 
 func newNodeTestServer(nodeSvc node.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, fakeInstanceService{}, fakeJobService{}, testLogger()), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, fakeInstanceService{}, fakeJobService{}, noopDeleteVM, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func superAdminAuthHeader(t *testing.T, tokens auth.TokenIssuer) map[string]string {
@@ -61,6 +61,38 @@ func TestHandleRegisterNodeSuccess(t *testing.T) {
 	}
 	if resp.NodeID != "node-1" || resp.NodeToken != "raw-node-token" {
 		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestHandleRegisterNodeWithBootstrapSecret(t *testing.T) {
+	svc := fakeNodeService{
+		registerFn: func(ctx context.Context, in node.RegisterInput) (node.RegisterResult, error) {
+			return node.RegisterResult{
+				Node:      node.Node{ID: "node-1", Hostname: in.Hostname, Status: node.StatusOnline},
+				NodeToken: "raw-node-token",
+			}, nil
+		},
+	}
+	srv, _ := newNodeTestServer(svc)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/nodes/register", registerNodeRequest{
+		Hostname: "agent-01", IP: "10.0.0.12", CPU: 8, MemoryMB: 16384, DiskGB: 500,
+	}, map[string]string{"Authorization": "Bearer " + testNodeBootstrapSecret})
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
+func TestHandleRegisterNodeWrongBootstrapSecretRejected(t *testing.T) {
+	srv, _ := newNodeTestServer(fakeNodeService{})
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/nodes/register", registerNodeRequest{
+		Hostname: "agent-01", IP: "10.0.0.12", CPU: 8, MemoryMB: 16384, DiskGB: 500,
+	}, map[string]string{"Authorization": "Bearer not-the-secret-and-not-a-jwt"})
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
 }
 

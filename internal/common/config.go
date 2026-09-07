@@ -9,12 +9,14 @@ import (
 
 // Config holds application configuration loaded from environment variables.
 type Config struct {
-	HTTPPort          string
-	DatabaseURL       string
-	JWTSecret         string
-	WorkerCount       int
-	KafkaBrokers      []string
-	SchedulerStrategy string
+	HTTPPort            string
+	DatabaseURL         string
+	JWTSecret           string
+	WorkerCount         int
+	KafkaBrokers        []string
+	SchedulerStrategy   string
+	AgentPort           string
+	NodeBootstrapSecret string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -26,12 +28,14 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPPort:          getEnv("NEBULA_HTTP_PORT", "8080"),
-		DatabaseURL:       os.Getenv("NEBULA_DATABASE_URL"),
-		JWTSecret:         os.Getenv("NEBULA_JWT_SECRET"),
-		WorkerCount:       workerCount,
-		KafkaBrokers:      strings.Split(getEnv("NEBULA_KAFKA_BROKERS", "kafka:9092"), ","),
-		SchedulerStrategy: getEnv("NEBULA_SCHEDULER_STRATEGY", "weighted"),
+		HTTPPort:            getEnv("NEBULA_HTTP_PORT", "8080"),
+		DatabaseURL:         os.Getenv("NEBULA_DATABASE_URL"),
+		JWTSecret:           os.Getenv("NEBULA_JWT_SECRET"),
+		WorkerCount:         workerCount,
+		KafkaBrokers:        strings.Split(getEnv("NEBULA_KAFKA_BROKERS", "kafka:9092"), ","),
+		SchedulerStrategy:   getEnv("NEBULA_SCHEDULER_STRATEGY", "weighted"),
+		AgentPort:           getEnv("NEBULA_AGENT_PORT", "7071"),
+		NodeBootstrapSecret: os.Getenv("NEBULA_NODE_BOOTSTRAP_SECRET"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -39,6 +43,9 @@ func Load() (Config, error) {
 	}
 	if cfg.JWTSecret == "" {
 		return Config{}, fmt.Errorf("NEBULA_JWT_SECRET is required")
+	}
+	if cfg.NodeBootstrapSecret == "" {
+		return Config{}, fmt.Errorf("NEBULA_NODE_BOOTSTRAP_SECRET is required")
 	}
 
 	return cfg, nil

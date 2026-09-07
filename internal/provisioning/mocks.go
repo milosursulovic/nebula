@@ -65,26 +65,26 @@ func (m *MockSteps) DeleteNetwork(ctx context.Context, instanceID string) error 
 	return nil
 }
 
-func (m *MockSteps) CreateVM(ctx context.Context, instanceID, nodeID string) error {
+func (m *MockSteps) CreateVM(ctx context.Context, instanceID, nodeID string, spec InstanceSpec) error {
 	if err := m.simulateWork(ctx); err != nil {
 		return err
 	}
-	m.logger.Info("provisioning: VM created (mock)", "instance_id", instanceID, "node_id", nodeID)
+	m.logger.Info("provisioning: VM created (mock)", "instance_id", instanceID, "node_id", nodeID, "spec", spec)
 	return nil
 }
 
-func (m *MockSteps) DeleteVM(ctx context.Context, instanceID string) error {
+func (m *MockSteps) DeleteVM(ctx context.Context, instanceID, nodeID string) error {
 	if err := m.simulateWork(ctx); err != nil {
 		return err
 	}
-	m.logger.Info("provisioning: VM deleted (mock)", "instance_id", instanceID)
+	m.logger.Info("provisioning: VM deleted (mock)", "instance_id", instanceID, "node_id", nodeID)
 	return nil
 }
 
-func (m *MockSteps) StartVM(ctx context.Context, instanceID string) error {
+func (m *MockSteps) StartVM(ctx context.Context, instanceID, nodeID string) error {
 	if err := m.simulateWork(ctx); err != nil {
 		return err
 	}
-	m.logger.Info("provisioning: VM started (mock)", "instance_id", instanceID)
+	m.logger.Info("provisioning: VM started (mock)", "instance_id", instanceID, "node_id", nodeID)
 	return nil
 }

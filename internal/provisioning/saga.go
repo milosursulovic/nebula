@@ -15,8 +15,10 @@ import (
 // compensating in reverse order on any step's failure (spec's own
 // example: Create VM fails -> delete network -> delete disk -> release
 // resources). Resource reservation is real (node.Reserve/Release, wired
-// for the first time this phase); disk/network/VM steps stay mocked (see
-// mocks.go) — those are Phase 11-13's job.
+// Phase 8); disk/network steps stay mocked (see mocks.go) — those are
+// Phase 12/13's job. VM steps (Phase 9) call out to the target node's
+// nebula-agent over HTTP (see agent_steps.go) — still a mock VM backend
+// on the agent side, but a real network hop, same as section 27 intends.
 type Saga struct {
 	instances instance.Service
 	nodes     node.Service
@@ -32,17 +34,41 @@ type Saga struct {
 	startVM       VMStarter
 }
 
-// NewSaga builds a Saga with the default (mock) steps. Tests construct a
-// Saga literal directly to inject a failing fake for one specific step.
-func NewSaga(instances instance.Service, nodes node.Service, sched scheduler.Scheduler, logger *slog.Logger) *Saga {
-	mocks := NewMockSteps(logger)
+// Steps bundles all seven saga step implementations, letting a caller mix
+// sources (e.g. mocked disk/network with agent-backed VM ops).
+type Steps struct {
+	CreateDisk    DiskCreator
+	DeleteDisk    DiskDeleter
+	CreateNetwork NetworkCreator
+	DeleteNetwork NetworkDeleter
+	CreateVM      VMCreator
+	DeleteVM      VMDeleter
+	StartVM       VMStarter
+}
+
+// NewSagaWithSteps builds a Saga with an explicit set of step
+// implementations.
+func NewSagaWithSteps(instances instance.Service, nodes node.Service, sched scheduler.Scheduler, logger *slog.Logger, steps Steps) *Saga {
 	return &Saga{
 		instances: instances, nodes: nodes, scheduler: sched, logger: logger,
-		createDisk: mocks.CreateDisk, deleteDisk: mocks.DeleteDisk,
-		createNetwork: mocks.CreateNetwork, deleteNetwork: mocks.DeleteNetwork,
-		createVM: mocks.CreateVM, deleteVM: mocks.DeleteVM,
-		startVM: mocks.StartVM,
+		createDisk: steps.CreateDisk, deleteDisk: steps.DeleteDisk,
+		createNetwork: steps.CreateNetwork, deleteNetwork: steps.DeleteNetwork,
+		createVM: steps.CreateVM, deleteVM: steps.DeleteVM,
+		startVM: steps.StartVM,
 	}
+}
+
+// NewSaga builds a Saga with the default (all-mock) steps — used by
+// tests. Tests also construct a Saga literal directly to inject a failing
+// fake for one specific step.
+func NewSaga(instances instance.Service, nodes node.Service, sched scheduler.Scheduler, logger *slog.Logger) *Saga {
+	mocks := NewMockSteps(logger)
+	return NewSagaWithSteps(instances, nodes, sched, logger, Steps{
+		CreateDisk: mocks.CreateDisk, DeleteDisk: mocks.DeleteDisk,
+		CreateNetwork: mocks.CreateNetwork, DeleteNetwork: mocks.DeleteNetwork,
+		CreateVM: mocks.CreateVM, DeleteVM: mocks.DeleteVM,
+		StartVM: mocks.StartVM,
+	})
 }
 
 // Provision runs the saga once for one instance. It's called once per
@@ -109,16 +135,17 @@ func (s *Saga) Provision(ctx context.Context, tenantID, instanceID string) error
 		}
 	})
 
-	if err := s.createVM(ctx, instanceID, chosen.ID); err != nil {
+	vmSpec := InstanceSpec{CPU: inst.CPU, MemoryMB: inst.MemoryMB, DiskGB: inst.DiskGB, Image: inst.Image}
+	if err := s.createVM(ctx, instanceID, chosen.ID, vmSpec); err != nil {
 		return fail(fmt.Errorf("create vm: %w", err))
 	}
 	compensations = append(compensations, func(ctx context.Context) {
-		if err := s.deleteVM(ctx, instanceID); err != nil {
+		if err := s.deleteVM(ctx, instanceID, chosen.ID); err != nil {
 			s.logger.Error("saga compensation: delete vm failed", "instance_id", instanceID, "error", err)
 		}
 	})
 
-	if err := s.startVM(ctx, instanceID); err != nil {
+	if err := s.startVM(ctx, instanceID, chosen.ID); err != nil {
 		return fail(fmt.Errorf("start vm: %w", err))
 	}
 

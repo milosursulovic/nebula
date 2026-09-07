@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,8 +9,45 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/node"
 )
+
+// requireNodeBootstrapOrSuperAdmin gates POST /nodes/register. An
+// unattended nebula-agent process (spec section 10: "the agent registers
+// itself") has no user credentials and can't obtain one — the spec leaves
+// bootstrap auth unspecified and defers "secure agent authentication"/mTLS
+// to Phase 10 (sections 50/51), so this accepts a pre-shared bootstrap
+// secret (constant-time compared) as an alternative to the existing
+// SUPER_ADMIN JWT path, which a human operator can still use to
+// register a node by hand.
+func requireNodeBootstrapOrSuperAdmin(tokens auth.TokenIssuer, bootstrapSecret string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := bearerToken(r.Header.Get("Authorization"))
+			if token == "" {
+				writeError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "missing bearer token")
+				return
+			}
+
+			if bootstrapSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(bootstrapSecret)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			claims, err := tokens.ParseAccessToken(token)
+			if err != nil {
+				writeError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid or expired token")
+				return
+			}
+			if claims.Role != auth.RoleSuperAdmin {
+				writeError(w, r, http.StatusForbidden, "FORBIDDEN", "insufficient role")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 type registerNodeRequest struct {
 	Hostname string `json:"hostname"`

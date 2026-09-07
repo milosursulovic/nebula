@@ -12,6 +12,7 @@ import (
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/instance"
 	"github.com/milosursulovic/nebula/internal/node"
+	"github.com/milosursulovic/nebula/internal/provisioning"
 )
 
 type createInstanceRequest struct {
@@ -134,7 +135,7 @@ func handleGetInstance(svc instance.Service) http.HandlerFunc {
 	}
 }
 
-func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, logger *slog.Logger) http.HandlerFunc {
+func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, deleteVM provisioning.VMDeleter, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -159,12 +160,17 @@ func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, logger *sl
 		}
 
 		// The provisioning saga (Phase 8) may have reserved real node
-		// capacity for this instance — release it now that it's deleted.
+		// capacity for this instance, and (Phase 9) actually created a VM
+		// on the node's agent — tear both down now that it's deleted.
 		// Best-effort: the instance is already gone either way; a failure
-		// here leaks reserved capacity rather than blocking the delete
-		// (same shape as the create/job-enqueue gap Phase 6 left and
-		// Phase 7 later closed properly via the outbox).
+		// here leaks reserved capacity/a mock VM rather than blocking the
+		// delete (same shape as the create/job-enqueue gap Phase 6 left
+		// and Phase 7 later closed properly via the outbox).
 		if deleted.NodeID != nil {
+			if err := deleteVM(r.Context(), deleted.ID, *deleted.NodeID); err != nil {
+				logger.Error("failed to delete vm on agent after instance delete",
+					"instance_id", deleted.ID, "node_id", *deleted.NodeID, "error", err)
+			}
 			if _, err := nodeSvc.Release(r.Context(), *deleted.NodeID, deleted.CPU, deleted.MemoryMB, deleted.DiskGB); err != nil {
 				logger.Error("failed to release node capacity after instance delete",
 					"instance_id", deleted.ID, "node_id", *deleted.NodeID, "error", err)

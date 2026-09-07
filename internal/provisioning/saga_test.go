@@ -174,9 +174,11 @@ func recordingSteps(rec *callRecorder, failStep string, failErr error) (
 	deleteDisk = func(ctx context.Context, instanceID string) error { return step("delete_disk") }
 	createNetwork = func(ctx context.Context, instanceID string) error { return step("create_network") }
 	deleteNetwork = func(ctx context.Context, instanceID string) error { return step("delete_network") }
-	createVM = func(ctx context.Context, instanceID, nodeID string) error { return step("create_vm") }
-	deleteVM = func(ctx context.Context, instanceID string) error { return step("delete_vm") }
-	startVM = func(ctx context.Context, instanceID string) error { return step("start_vm") }
+	createVM = func(ctx context.Context, instanceID, nodeID string, spec InstanceSpec) error {
+		return step("create_vm")
+	}
+	deleteVM = func(ctx context.Context, instanceID, nodeID string) error { return step("delete_vm") }
+	startVM = func(ctx context.Context, instanceID, nodeID string) error { return step("start_vm") }
 	return
 }
 

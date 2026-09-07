@@ -50,6 +50,8 @@ services:
       NEBULA_JWT_SECRET: "dev-only-secret-change-me"
       NEBULA_WORKER_COUNT: "3"
       NEBULA_KAFKA_BROKERS: "kafka:9092"
+      NEBULA_AGENT_PORT: "7071"
+      NEBULA_NODE_BOOTSTRAP_SECRET: "dev-only-node-bootstrap-secret-change-me"
     ports:
       - "8080:8080"
     depends_on:
@@ -57,6 +59,27 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+
+  nebula-agent:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/nebula-agent.Dockerfile
+    environment:
+      NEBULA_API_URL: "http://nebula-api:8080"
+      NEBULA_AGENT_HOSTNAME: "nebula-agent-1"
+      # The Docker network's own DNS name for this service — how
+      # nebula-api reaches it back for VM operations (spec section 27/28).
+      NEBULA_AGENT_IP: "nebula-agent"
+      NEBULA_AGENT_PORT: "7071"
+      NEBULA_AGENT_CPU: "8"
+      NEBULA_AGENT_MEMORY_MB: "16384"
+      NEBULA_AGENT_DISK_GB: "500"
+      NEBULA_AGENT_HEARTBEAT_INTERVAL: "5s"
+      NEBULA_NODE_BOOTSTRAP_SECRET: "dev-only-node-bootstrap-secret-change-me"
+    ports:
+      - "7071:7071"
+    depends_on:
+      - nebula-api
 
 volumes:
   postgres-data:

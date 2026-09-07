@@ -12,10 +12,11 @@ import (
 	"github.com/milosursulovic/nebula/internal/instance"
 	"github.com/milosursulovic/nebula/internal/job"
 	"github.com/milosursulovic/nebula/internal/node"
+	"github.com/milosursulovic/nebula/internal/provisioning"
 )
 
 // NewServer builds the nebula-api HTTP server: router, middleware, and routes.
-func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, logger *slog.Logger) *http.Server {
+func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, deleteVM provisioning.VMDeleter, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -39,11 +40,16 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 			// (checked inside the handler), not a user JWT.
 			r.Post("/{id}/heartbeat", handleHeartbeat(nodeSvc))
 
+			// Registration accepts the bootstrap secret (unattended agents)
+			// or a SUPER_ADMIN JWT (manual/human registration) — see
+			// requireNodeBootstrapOrSuperAdmin's doc comment.
+			r.With(requireNodeBootstrapOrSuperAdmin(tokens, nodeBootstrapSecret)).
+				Post("/register", handleRegisterNode(nodeSvc))
+
 			r.Group(func(r chi.Router) {
 				r.Use(auth.Authenticate(tokens))
 				r.Use(auth.RequireRole(auth.RoleSuperAdmin))
 
-				r.Post("/register", handleRegisterNode(nodeSvc))
 				r.Get("/", handleListNodes(nodeSvc))
 				r.Get("/{id}", handleGetNode(nodeSvc))
 			})
@@ -55,7 +61,7 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 			r.Post("/", handleCreateInstance(instanceSvc))
 			r.Get("/", handleListInstances(instanceSvc))
 			r.Get("/{id}", handleGetInstance(instanceSvc))
-			r.Delete("/{id}", handleDeleteInstance(instanceSvc, nodeSvc, logger))
+			r.Delete("/{id}", handleDeleteInstance(instanceSvc, nodeSvc, deleteVM, logger))
 		})
 
 		r.Route("/jobs", func(r chi.Router) {

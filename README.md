@@ -37,9 +37,12 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 
 **Compute nodes** (`internal/node/`)
 - Nodes are shared platform infrastructure, not tenant-scoped.
-- `POST /api/v1/nodes/register`, `GET /api/v1/nodes`, `GET
-  /api/v1/nodes/{id}` — gated by `RequireRole(SUPER_ADMIN)`. Registration
-  returns a one-time opaque `node_token`.
+- `POST /api/v1/nodes/register` — accepts either a pre-shared
+  `NEBULA_NODE_BOOTSTRAP_SECRET` bearer token (how an unattended
+  `nebula-agent` registers itself, spec section 10) or a `SUPER_ADMIN` JWT
+  (manual/human registration). Returns a one-time opaque `node_token`.
+- `GET /api/v1/nodes`, `GET /api/v1/nodes/{id}` — gated by
+  `RequireRole(SUPER_ADMIN)`.
 - `POST /api/v1/nodes/{id}/heartbeat` — authenticated with that node token
   (not a user JWT, since the agent runs unattended).
 - A background **node monitor** checks every 5s and demotes a node to
@@ -54,8 +57,9 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   `status: "PENDING"` and enqueues a `CREATE_INSTANCE` job; a worker then
   runs the provisioning saga (see below), landing the instance on
   `RUNNING` with a real `node_id` — or `ERROR` if provisioning failed.
-  Delete releases the instance's reserved node capacity (best-effort) if
-  it had been scheduled onto one.
+  Delete tears down the VM on the node's agent and releases the instance's
+  reserved node capacity (both best-effort) if it had been scheduled onto
+  one.
 - An explicit state machine (`PENDING → PROVISIONING → RUNNING → STOPPING →
   STOPPED`, plus `ERROR`/`DELETING`/`DELETED`) rejects invalid transitions;
   `ERROR → PROVISIONING` lets a job retry re-enter the saga; delete is a
@@ -82,16 +86,42 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 **Provisioning saga** (`internal/provisioning/`)
 - Drives each `CREATE_INSTANCE` job attempt through: schedule a node →
   reserve its capacity → set `node_id` → create disk → create network →
-  create VM → start VM → transition to `RUNNING`. Disk/network/VM steps
-  are mocked (simulated work, always succeed) — real implementations are
-  Phase 12 (Networking) and Phase 13 (Storage)'s job; resource reservation
-  is real.
+  create VM → start VM → transition to `RUNNING`. Disk/network steps are
+  local mocks (simulated work, always succeed) — real implementations are
+  Phase 12 (Networking) and Phase 13 (Storage)'s job. Resource reservation
+  is real, and VM steps are real HTTP calls to the target node's
+  `nebula-agent` (see below) — the agent's own VM backend is still mocked
+  (Phase 11/KVM's job), but a real network hop happens now, not an
+  in-process function call.
 - Any step's failure compensates in reverse order — exactly the spec's
   worked example: create VM fails → delete network → delete disk →
   release reservation — then transitions the instance to `ERROR`. A job
   retry re-invokes the saga from scratch, re-scheduling fresh (possibly
   onto a different node) rather than assuming the prior choice still
   holds.
+
+**Nebula Agent** (`cmd/nebula-agent`, `internal/agent/`)
+- A separate binary that runs on each compute node (spec section 27) — the
+  abstraction layer between the control plane and the machine, so
+  `nebula-api` never executes anything directly on a node.
+- On startup: registers itself with `nebula-api` (retried with backoff —
+  fails fast, no retries, on a permanent `409` like an already-registered
+  hostname) and starts a heartbeat loop, posting real host metrics (CPU%
+  from `/proc/stat` deltas, memory from `/proc/meminfo`, disk from
+  `statfs`, load average from `/proc/loadavg`) every
+  `NEBULA_AGENT_HEARTBEAT_INTERVAL` (default `5s`).
+- Runs its own small, unauthenticated REST server (`NEBULA_AGENT_PORT`,
+  default `7071` — no TLS/mTLS yet, that's Phase 10): `GET /info`
+  (current metrics), `POST /vms`, `GET /vms/{instanceID}`,
+  `POST /vms/{instanceID}/start`, `DELETE /vms/{instanceID}` — this is
+  the REST shape of spec section 28's eventual protobuf `NebulaAgent`
+  service. VM state is in-memory only (`internal/agent/store.go`); Phase
+  11 replaces it with libvirt.
+- Registration is not idempotent across restarts — a restarted agent with
+  the same hostname gets rejected and exits; recovering it today needs a
+  hostname change or removing the stale `compute_nodes` row by hand
+  (accepted Phase 9 limitation, same idempotency-deferred precedent as
+  instance creation).
 
 **Jobs** (`internal/job/`)
 - A channel-based worker pool (dispatcher goroutine polls PostgreSQL for
