@@ -9,10 +9,11 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/milosursulovic/nebula/internal/auth"
+	"github.com/milosursulovic/nebula/internal/node"
 )
 
 // NewServer builds the nebula-api HTTP server: router, middleware, and routes.
-func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, logger *slog.Logger) *http.Server {
+func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, logger *slog.Logger) *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -30,6 +31,21 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 		})
 
 		r.With(auth.Authenticate(tokens)).Get("/me", handleMe)
+
+		r.Route("/nodes", func(r chi.Router) {
+			// Heartbeat authenticates with the node's own bearer token
+			// (checked inside the handler), not a user JWT.
+			r.Post("/{id}/heartbeat", handleHeartbeat(nodeSvc))
+
+			r.Group(func(r chi.Router) {
+				r.Use(auth.Authenticate(tokens))
+				r.Use(auth.RequireRole(auth.RoleSuperAdmin))
+
+				r.Post("/register", handleRegisterNode(nodeSvc))
+				r.Get("/", handleListNodes(nodeSvc))
+				r.Get("/{id}", handleGetNode(nodeSvc))
+			})
+		})
 	})
 
 	return &http.Server{

@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/common"
+	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/pkg/api"
 )
 
@@ -43,7 +45,18 @@ func run(logger *slog.Logger) error {
 	authRepo := auth.NewRepository(pool)
 	authSvc := auth.NewService(authRepo, tokens)
 
-	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, logger)
+	nodeRepo := node.NewRepository(pool)
+	nodeSvc := node.NewService(nodeRepo, logger)
+	nodeMonitor := node.NewMonitor(nodeRepo, logger)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		nodeMonitor.Run(ctx)
+	}()
+
+	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, logger)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -67,6 +80,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	wg.Wait()
 	logger.Info("nebula-api stopped cleanly")
 	return nil
 }

@@ -1,14 +1,12 @@
 package auth
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/milosursulovic/nebula/internal/common"
 )
 
 const (
@@ -68,15 +66,9 @@ func (t TokenIssuer) ParseAccessToken(raw string) (*Claims, error) {
 // newRefreshToken generates a new opaque refresh token, returning both the
 // raw value (to hand back to the client) and its SHA-256 hash (to store).
 func newRefreshToken() (raw, hash string, err error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", "", err
-	}
-	raw = base64.RawURLEncoding.EncodeToString(buf)
-	return raw, hashRefreshToken(raw), nil
+	return common.GenerateOpaqueToken()
 }
 
 func hashRefreshToken(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
+	return common.HashToken(raw)
 }
