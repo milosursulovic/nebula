@@ -9,6 +9,7 @@ import (
 type Config struct {
 	HTTPPort    string
 	DatabaseURL string
+	JWTSecret   string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -17,10 +18,14 @@ func Load() (Config, error) {
 	cfg := Config{
 		HTTPPort:    getEnv("NEBULA_HTTP_PORT", "8080"),
 		DatabaseURL: os.Getenv("NEBULA_DATABASE_URL"),
+		JWTSecret:   os.Getenv("NEBULA_JWT_SECRET"),
 	}
 
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("NEBULA_DATABASE_URL is required")
+	}
+	if cfg.JWTSecret == "" {
+		return Config{}, fmt.Errorf("NEBULA_JWT_SECRET is required")
 	}
 
 	return cfg, nil

@@ -7,16 +7,30 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/milosursulovic/nebula/internal/auth"
 )
 
 // NewServer builds the nebula-api HTTP server: router, middleware, and routes.
-func NewServer(addr string, db Pinger, logger *slog.Logger) *http.Server {
+func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, logger *slog.Logger) *http.Server {
 	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 	r.Use(requestLogger(logger))
 
 	r.Get("/health", handleHealth)
 	r.Get("/ready", handleReady(db))
+
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/register", handleRegister(authSvc))
+			r.Post("/login", handleLogin(authSvc))
+			r.Post("/refresh", handleRefresh(authSvc))
+			r.Post("/logout", handleLogout(authSvc))
+		})
+
+		r.With(auth.Authenticate(tokens)).Get("/me", handleMe)
+	})
 
 	return &http.Server{
 		Addr:              addr,

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/milosursulovic/nebula/internal/auth"
 )
 
 type fakePinger struct {
@@ -22,8 +24,12 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func testTokenIssuer() auth.TokenIssuer {
+	return auth.NewTokenIssuer("test-secret")
+}
+
 func TestHandleHealth(t *testing.T) {
-	srv := NewServer(":0", fakePinger{}, testLogger())
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, testTokenIssuer(), testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -46,7 +52,7 @@ func TestHandleReady(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := NewServer(":0", tt.pinger, testLogger())
+			srv := NewServer(":0", tt.pinger, fakeAuthService{}, testTokenIssuer(), testLogger())
 
 			req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 			rec := httptest.NewRecorder()

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/common"
 	"github.com/milosursulovic/nebula/pkg/api"
 )
@@ -38,7 +39,11 @@ func run(logger *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	srv := api.NewServer(":"+cfg.HTTPPort, pool, logger)
+	tokens := auth.NewTokenIssuer(cfg.JWTSecret)
+	authRepo := auth.NewRepository(pool)
+	authSvc := auth.NewService(authRepo, tokens)
+
+	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, logger)
 
 	errCh := make(chan error, 1)
 	go func() {
