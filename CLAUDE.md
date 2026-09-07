@@ -73,8 +73,12 @@ full section.
 | 6 | Jobs (worker pool, retry/backoff, DLQ) | `4ccf7f5` |
 | 7 | Kafka (transactional outbox, audit consumer) | `37860f4` |
 | 8 | Provisioning saga (real scheduling/reservation, compensation) | `5f662c7` |
+| 9 | Nebula Agent (registration, heartbeat, real metrics, mock VM ops over real HTTP) | `0040289` |
 
-**Next: Phase 9 — Nebula Agent** (spec section 63/line 2675).
+**Next: Phase 10 — gRPC** (spec section 64/line 2699). Moves control
+plane -> agent communication (currently REST, `internal/provisioning/
+agent_steps.go` + `internal/agent/server.go`) to protobuf/gRPC, and adds
+TLS then mTLS.
 
 **Known issue (found during Phase 8 verification, not Phase 8's own bug):**
 the audit Kafka consumer (`internal/audit`, reader wired in
@@ -84,7 +88,11 @@ consumer group coordinator... Group Coordinator Not Available"` on a fresh
 job pool/outbox publisher/node monitor, it doesn't appear to self-retry
 the coordinator connection. Reproduced once (~8 min stall, unstuck only
 after an external consumer forced a rebalance); not yet root-caused or
-fixed. Worth a clean re-test (`compose up` -> `migrate up` -> wait a
+fixed. Three separate Phase 9 verification runs saw the same coordinator
+error at startup but self-healed within seconds every time — the ~8 min
+stall may have been a fluke (possibly related to the manual Kafka CLI
+probing used to characterize it) rather than a reliably-reproducible bug;
+still worth a clean re-test (`compose up` -> `migrate up` -> wait a
 minute or two with zero manual Kafka CLI interference) before deciding
 whether it's a slow-retry or a fully wedged reader.
 
@@ -152,6 +160,15 @@ whether it's a slow-retry or a fully wedged reader.
   Tenant-owned resources (instances) just require authentication, no role
   gate — both `TENANT_ADMIN` and `USER` can act on their own tenant's
   resources per spec's RBAC table (section 8/line 461).
+- Machine-to-machine bootstrap (an unattended process with no user
+  credentials, e.g. `nebula-agent` self-registering): a pre-shared secret
+  (`NEBULA_NODE_BOOTSTRAP_SECRET`, constant-time compared) as an
+  alternative auth path alongside the existing human/JWT one, not a
+  replacement — see `pkg/api/node_handlers.go`'s
+  `requireNodeBootstrapOrSuperAdmin` (Phase 9). The spec deliberately
+  leaves this unspecified before mTLS (Phase 10) lands; reach for this
+  same pattern rather than re-deciding it if another unattended process
+  needs to call into `nebula-api` before Phase 10.
 - Concurrency: optimistic (version column + jittered retry) for resource
   reservation (`node.Reserve`/`Release`); row-locking
   (`SELECT ... FOR UPDATE SKIP LOCKED`) for queue-claiming (job dispatch).
