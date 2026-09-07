@@ -29,7 +29,7 @@ func testTokenIssuer() auth.TokenIssuer {
 }
 
 func TestHandleHealth(t *testing.T) {
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, testTokenIssuer(), fakeNodeService{}, testLogger())
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, testTokenIssuer(), fakeNodeService{}, fakeInstanceService{}, testLogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -52,7 +52,7 @@ func TestHandleReady(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := NewServer(":0", tt.pinger, fakeAuthService{}, testTokenIssuer(), fakeNodeService{}, testLogger())
+			srv := NewServer(":0", tt.pinger, fakeAuthService{}, testTokenIssuer(), fakeNodeService{}, fakeInstanceService{}, testLogger())
 
 			req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 			rec := httptest.NewRecorder()

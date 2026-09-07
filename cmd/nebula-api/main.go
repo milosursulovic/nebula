@@ -13,6 +13,7 @@ import (
 
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/common"
+	"github.com/milosursulovic/nebula/internal/instance"
 	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/pkg/api"
 )
@@ -56,7 +57,10 @@ func run(logger *slog.Logger) error {
 		nodeMonitor.Run(ctx)
 	}()
 
-	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, logger)
+	instanceRepo := instance.NewRepository(pool)
+	instanceSvc := instance.NewService(instanceRepo)
+
+	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, logger)
 
 	errCh := make(chan error, 1)
 	go func() {

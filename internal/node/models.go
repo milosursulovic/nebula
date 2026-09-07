@@ -20,22 +20,22 @@ const (
 
 // Node is a physical or virtual Linux machine capable of running VMs.
 type Node struct {
-	ID                 string
-	Hostname           string
-	IP                 string
-	Status             Status
-	TotalCPU           int
-	AvailableCPU       int
-	TotalMemoryMB      int
-	AvailableMemoryMB  int
-	TotalDiskGB        int
-	AvailableDiskGB    int
-	LoadAverage        float64
-	RunningInstances   int
-	LastHeartbeatAt    *time.Time
-	TokenHash          string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                string
+	Hostname          string
+	IP                string
+	Status            Status
+	TotalCPU          int
+	AvailableCPU      int
+	TotalMemoryMB     int
+	AvailableMemoryMB int
+	TotalDiskGB       int
+	AvailableDiskGB   int
+	LoadAverage       float64
+	RunningInstances  int
+	LastHeartbeatAt   *time.Time
+	TokenHash         string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // RegisterInput is what a caller supplies to register a new node

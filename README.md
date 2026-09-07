@@ -45,6 +45,19 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 - A background **node monitor** checks every 5s and demotes a node to
   `DEGRADED` (10-30s since last heartbeat) or `OFFLINE` (30s+).
 
+**Instances** (`internal/instance/`)
+- Instances are tenant-scoped (unlike nodes) — every query is scoped to the
+  caller's `tenant_id` from their JWT, never a client-supplied value.
+- `POST /api/v1/instances`, `GET /api/v1/instances`, `GET
+  /api/v1/instances/{id}`, `DELETE /api/v1/instances/{id}` — any
+  authenticated tenant member. Create returns immediately with
+  `status: "PENDING"`; provisioning is not yet wired up (no scheduler/worker
+  exists), so instances stay virtual records for now — no KVM.
+- An explicit state machine (`PENDING → PROVISIONING → RUNNING → STOPPING →
+  STOPPED`, plus `ERROR`/`DELETING`/`DELETED`) rejects invalid transitions;
+  delete is a soft two-hop `→ DELETING → DELETED`.
+- Cross-tenant access returns `404`, not `403` (no existence leak).
+
 **Persistence & infra**
 - PostgreSQL via pgx (`internal/common/postgres.go`), SQL migrations via
   `golang-migrate` (`migrations/`).
