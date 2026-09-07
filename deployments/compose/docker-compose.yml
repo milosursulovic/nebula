@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: nebula
+      POSTGRES_PASSWORD: nebula
+      POSTGRES_DB: nebula
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nebula -d nebula"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nebula-api:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/nebula-api.Dockerfile
+    environment:
+      NEBULA_HTTP_PORT: "8080"
+      NEBULA_DATABASE_URL: "postgres://nebula:nebula@postgres:5432/nebula?sslmode=disable"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
