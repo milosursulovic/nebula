@@ -77,13 +77,16 @@ full section.
 | 10 | gRPC + TLS (protobuf via buf, control plane -> agent over gRPC, server-authenticated TLS) | `988674f` |
 | 11 | KVM/libvirt (Hypervisor interface, MockHypervisor, real LibvirtHypervisor gated behind -tags libvirt) | `2be9a7e` |
 | 12 | Networking (network/subnet/IPAM, real saga integration, instance ip_address) | `af37aca` |
+| 13 | Storage (real sparse-file disks, agent gRPC disk RPCs, saga integration, attach/detach/resize API) | `d45209a` |
 
-**Next: Phase 13 — Storage** (spec section 67/line 2765). Real disks —
-the saga's `createDisk`/`deleteDisk` steps are still `MockSteps` (see
-`internal/provisioning/mocks.go`), same shape Phase 12 replaced for
-network. Linux bridge/veth/network-namespace device management (spec
-section 33) also stays deferred past Phase 12 — see its own scope-
-boundary note below and in the Phase 12 commit message.
+**Next: Phase 14 — Observability** (spec section 68/line 2785). All five
+saga steps are real as of Phase 13 (`internal/provisioning/mocks.go` is
+gone — nothing left to mock). Linux bridge/veth/network-namespace device
+management (spec section 33) and real libvirt `<disk>`/`<interface>`
+device attachment both stay deferred — see the Phase 12/13 plans' own
+scope-boundary notes for why (no `CAP_NET_ADMIN` in this sandbox for the
+former; no bootable OS/image pipeline yet to make either meaningfully
+testable).
 
 **This sandbox has real libvirtd/qemu-kvm** (`libvirt-dev` installed
 Phase 11) — `LibvirtHypervisor` isn't theoretical, it's proven against
@@ -229,6 +232,15 @@ or as a standalone fix, don't just re-verify around it again.
   from the background goroutines (node monitor, outbox publisher) that
   started before the migration landed. Self-heals the moment the migration
   applies — not a bug, don't chase it.
+- Since Phase 12, creating an instance on a fresh stack with **no network
+  created yet** doesn't fail synchronously — `POST /instances` returns
+  `201 PENDING` fine, but the saga then fails asynchronously at its
+  `create network` step (`"allocate ip: no available ip address"`),
+  retries the full backoff schedule, and lands the instance in `ERROR`.
+  Always `POST /api/v1/networks` (as `SUPER_ADMIN`) before creating
+  instances in a fresh walkthrough — not a bug, just easy to trip over
+  since the symptom shows up several seconds later than the request that
+  "caused" it.
 - No `protoc`/`sudo apt-get` in this sandbox (no passwordless sudo) — use
   `buf` (`go install github.com/bufbuild/buf/cmd/buf@latest`, pure Go,
   ships its own compiler) plus `protoc-gen-go`/`protoc-gen-go-grpc`
