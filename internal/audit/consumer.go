@@ -6,7 +6,12 @@ import (
 	"log/slog"
 
 	kafka "github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
+
+	"github.com/milosursulovic/nebula/internal/outbox"
 )
+
+var tracer = otel.Tracer("nebula-audit")
 
 // KafkaReader is the narrow capability Consumer needs — satisfied by
 // *kafka.Reader, faked in tests without a real broker.
@@ -51,6 +56,13 @@ func header(msg kafka.Message, key string) string {
 }
 
 func (c *Consumer) handle(ctx context.Context, msg kafka.Message) {
+	// Continue the outbox publisher's span (spec section 36's "Kafka"
+	// hop) rather than starting a disconnected one.
+	headers := msg.Headers
+	ctx = otel.GetTextMapPropagator().Extract(ctx, outbox.KafkaHeaderCarrier{Headers: &headers})
+	ctx, span := tracer.Start(ctx, "audit.consume")
+	defer span.End()
+
 	eventType := header(msg, "event_type")
 	action, ok := ActionFor(eventType)
 	if !ok {

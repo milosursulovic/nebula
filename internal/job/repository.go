@@ -45,24 +45,24 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 }
 
 const selectColumns = `id, type, status, tenant_id, instance_id, node_id,
-	attempts, max_attempts, next_attempt_at, error, created_at, started_at, finished_at`
+	attempts, max_attempts, next_attempt_at, error, created_at, started_at, finished_at, trace_context`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(
 		&j.ID, &j.Type, &j.Status, &j.TenantID, &j.InstanceID, &j.NodeID,
 		&j.Attempts, &j.MaxAttempts, &j.NextAttemptAt, &j.Error,
-		&j.CreatedAt, &j.StartedAt, &j.FinishedAt,
+		&j.CreatedAt, &j.StartedAt, &j.FinishedAt, &j.TraceContext,
 	)
 	return j, err
 }
 
 func (r *pgxRepository) Create(ctx context.Context, j Job) (Job, error) {
 	row := r.pool.QueryRow(ctx, `
-		INSERT INTO jobs (type, status, tenant_id, instance_id, node_id, max_attempts)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO jobs (type, status, tenant_id, instance_id, node_id, max_attempts, trace_context)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+selectColumns,
-		j.Type, j.Status, j.TenantID, j.InstanceID, j.NodeID, j.MaxAttempts,
+		j.Type, j.Status, j.TenantID, j.InstanceID, j.NodeID, j.MaxAttempts, j.TraceContext,
 	)
 	return scanJob(row)
 }

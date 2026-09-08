@@ -6,7 +6,10 @@ import (
 	"time"
 
 	kafka "github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
 )
+
+var tracer = otel.Tracer("nebula-outbox")
 
 // Topic is the single Kafka topic all domain events publish to. Spec's
 // event list (section 22) is small enough (11 named types, 7 wired this
@@ -60,6 +63,13 @@ func (p *Publisher) tick(ctx context.Context) {
 	}
 
 	for _, e := range events {
+		// A fresh trace root per publish (spec section 36's "Kafka" hop)
+		// — not chained back to whatever request originally caused the
+		// domain event, since that request may be long gone by the time
+		// this ticks; see the Phase 14 plan's scope note on why that's
+		// an honest simplification, not a gap.
+		spanCtx, span := tracer.Start(ctx, "outbox.publish")
+
 		msg := kafka.Message{
 			Topic: Topic,
 			Key:   []byte(e.AggregateID),
@@ -71,11 +81,15 @@ func (p *Publisher) tick(ctx context.Context) {
 				{Key: "aggregate_id", Value: []byte(e.AggregateID)},
 			},
 		}
+		otel.GetTextMapPropagator().Inject(spanCtx, KafkaHeaderCarrier{Headers: &msg.Headers})
 
 		if err := p.writer.WriteMessages(ctx, msg); err != nil {
 			p.logger.Error("outbox publisher: publish failed, will retry next tick", "event_id", e.ID, "error", err)
+			span.RecordError(err)
+			span.End()
 			continue // leave unpublished; next tick retries (at-least-once)
 		}
+		span.End()
 
 		if err := p.repo.MarkPublished(ctx, e.ID); err != nil {
 			p.logger.Error("outbox publisher: mark published failed", "event_id", e.ID, "error", err)

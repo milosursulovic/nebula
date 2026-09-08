@@ -11,18 +11,21 @@ const (
 	StrategyWeighted    = "weighted"
 )
 
-// NewScheduler builds a Scheduler for the named strategy.
+// NewScheduler builds a Scheduler for the named strategy, wrapped to
+// record nebula_scheduler_decisions_total (spec section 35).
 func NewScheduler(strategy string, nodes NodeLister) (Scheduler, error) {
+	var s Scheduler
 	switch strategy {
 	case StrategyFirstFit:
-		return NewFirstFit(nodes), nil
+		s = NewFirstFit(nodes)
 	case StrategyBestFit:
-		return NewBestFit(nodes), nil
+		s = NewBestFit(nodes)
 	case StrategyLeastLoaded:
-		return NewLeastLoaded(nodes), nil
+		s = NewLeastLoaded(nodes)
 	case StrategyWeighted:
-		return NewWeighted(nodes), nil
+		s = NewWeighted(nodes)
 	default:
 		return nil, fmt.Errorf("unknown scheduler strategy %q", strategy)
 	}
+	return newInstrumented(strategy, s), nil
 }

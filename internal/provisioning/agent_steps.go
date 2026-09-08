@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
@@ -53,7 +54,14 @@ func (a *AgentSteps) dial(ctx context.Context, nodeID string) (agentpb.NebulaAge
 		return nil, nil, fmt.Errorf("resolve node %s: %w", nodeID, err)
 	}
 
-	conn, err := grpc.NewClient(fmt.Sprintf("%s:%s", n.IP, a.agentPort), grpc.WithTransportCredentials(a.creds))
+	// otelgrpc's stats handler propagates the active span (from the job's
+	// re-hydrated trace context, see instance.Repository.CreateWithJob /
+	// job.Pool.execute) over gRPC metadata automatically — spec section
+	// 36's "gRPC -> Agent" hop.
+	conn, err := grpc.NewClient(fmt.Sprintf("%s:%s", n.IP, a.agentPort),
+		grpc.WithTransportCredentials(a.creds),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial agent: %w", err)
 	}

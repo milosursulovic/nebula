@@ -6,6 +6,11 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
+	"github.com/milosursulovic/nebula/internal/metrics"
 )
 
 // Handler executes one job's actual work. Pool knows nothing about what a
@@ -99,11 +104,18 @@ func (p *Pool) dispatch(ctx context.Context, jobs chan<- Job) {
 }
 
 func (p *Pool) execute(ctx context.Context, j Job) {
+	// Continue the trace that enqueued this job (spec section 36) — the
+	// original HTTP request's span, captured at enqueue time since the
+	// worker's call is a genuinely separate, later, async invocation.
+	ctx = withTraceContext(ctx, j.TraceContext)
+
 	handler, ok := p.handlers[j.Type]
 	if !ok {
 		if _, err := p.repo.MarkFailed(ctx, j.ID, j.Attempts, fmt.Sprintf("no handler registered for job type %s", j.Type)); err != nil {
 			p.logger.Error("job pool: mark failed (no handler) failed", "job_id", j.ID, "error", err)
 		}
+		metrics.JobsTotal.WithLabelValues(string(j.Type), "failed").Inc()
+		metrics.JobsFailedTotal.WithLabelValues(string(j.Type)).Inc()
 		return
 	}
 
@@ -116,7 +128,16 @@ func (p *Pool) execute(ctx context.Context, j Job) {
 		p.logger.Error("job pool: mark success failed", "job_id", j.ID, "error", err)
 		return
 	}
+	metrics.JobsTotal.WithLabelValues(string(j.Type), "success").Inc()
 	p.logger.Info("job succeeded", "job_id", j.ID, "type", j.Type)
+}
+
+func withTraceContext(ctx context.Context, traceparent *string) context.Context {
+	if traceparent == nil || *traceparent == "" {
+		return ctx
+	}
+	carrier := propagation.MapCarrier{"traceparent": *traceparent}
+	return otel.GetTextMapPropagator().Extract(ctx, carrier)
 }
 
 func (p *Pool) handleFailure(ctx context.Context, j Job, execErr error) {
@@ -127,6 +148,8 @@ func (p *Pool) handleFailure(ctx context.Context, j Job, execErr error) {
 			p.logger.Error("job pool: mark failed failed", "job_id", j.ID, "error", err)
 			return
 		}
+		metrics.JobsTotal.WithLabelValues(string(j.Type), "failed").Inc()
+		metrics.JobsFailedTotal.WithLabelValues(string(j.Type)).Inc()
 		p.logger.Error("job failed permanently (entering DLQ)", "job_id", j.ID, "type", j.Type, "attempts", newAttempts, "error", execErr)
 		return
 	}
@@ -136,5 +159,6 @@ func (p *Pool) handleFailure(ctx context.Context, j Job, execErr error) {
 		p.logger.Error("job pool: mark queued for retry failed", "job_id", j.ID, "error", err)
 		return
 	}
+	metrics.JobsTotal.WithLabelValues(string(j.Type), "retry").Inc()
 	p.logger.Warn("job failed, will retry", "job_id", j.ID, "type", j.Type, "attempt", newAttempts, "backoff", backoff, "error", execErr)
 }

@@ -1,0 +1,26 @@
+{
+  "uid": "nebula-scheduler",
+  "title": "NEBULA / Scheduler",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Scheduling decisions by outcome",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(nebula_scheduler_decisions_total[5m])) by (outcome)", "refId": "A", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Decisions by strategy",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(nebula_scheduler_decisions_total[5m])) by (strategy)", "refId": "A", "legendFormat": "{{strategy}}" }
+      ]
+    }
+  ]
+}

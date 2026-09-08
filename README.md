@@ -244,6 +244,41 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   matching the existing `CGO_ENABLED=0` build). Compose runs a single-node
   KRaft `apache/kafka` broker — no separate Zookeeper container.
 
+**Observability** (`internal/metrics/`, `internal/tracing/`)
+- `GET /metrics` on `nebula-api` (unauthenticated, like `/health`/`/ready`
+  — matches how Prometheus scraping normally works) exposes: request rate/
+  latency (`nebula_api_requests_total`, `nebula_api_request_duration_seconds`,
+  labeled by chi's matched route pattern, not the raw path, to avoid label
+  cardinality blowing up on `{id}`-shaped URLs), scheduler decisions
+  (`nebula_scheduler_decisions_total{strategy,outcome}`), job outcomes
+  (`nebula_jobs_total`, `nebula_jobs_failed_total`), node resource usage
+  (`nebula_node_cpu_usage`, `nebula_node_memory_usage`, set live from each
+  heartbeat), instance counts by status (`nebula_instances_total`, a
+  `prometheus.Collector` querying Postgres at scrape time, not incrementally
+  bookkept), and the audit consumer's Kafka lag
+  (`nebula_kafka_consumer_lag`).
+- Distributed tracing via OpenTelemetry, exported over OTLP-HTTP straight
+  to Jaeger (`internal/tracing.NewProvider`, called by both `nebula-api`
+  and `nebula-agent` with their own service name) — one trace follows
+  `POST /instances` end to end: the HTTP handler span, DB spans
+  (`otelpgx`), the async job-worker/provisioning-saga spans, the gRPC
+  call to `nebula-agent` (`otelgrpc`), and the agent's own
+  hypervisor/disk-store spans. The hard part is the gap in the middle:
+  job dispatch is Postgres-poll-based, not a direct call, so there's a
+  real async gap between "HTTP request enqueues a job" and "a worker
+  picks it up later, possibly seconds away." Bridged by capturing the
+  W3C `traceparent` on the `jobs.trace_context` column at enqueue time
+  (same transaction as the instance+job insert) and re-extracting it into
+  the worker's `context.Context` when it claims the job — so the saga's
+  spans land as children of the *original* request's trace, not a
+  disconnected new one. The outbox → Kafka → audit-log pipeline gets its
+  own separate two-hop trace (publish → consume, `traceparent` carried as
+  a Kafka header) rather than chaining back to the request that caused
+  the underlying domain event.
+- Grafana dashboards (`deployments/grafana/`), provisioned (not clicked
+  together by hand) via datasource + dashboard-provider YAML: API, nodes,
+  instances, scheduler, jobs, Kafka, workers.
+
 **Persistence & infra**
 - PostgreSQL via pgx (`internal/common/postgres.go`), SQL migrations via
   `golang-migrate` (`migrations/`).
@@ -265,6 +300,10 @@ make migrate-up
 curl localhost:8080/health
 curl localhost:8080/ready
 ```
+
+Also brought up by `make compose-up`: Prometheus (`localhost:9090`),
+Jaeger UI (`localhost:16686`), Grafana (`localhost:3000`, `admin`/`admin`,
+7 dashboards auto-provisioned under the "NEBULA" folder).
 
 Or run the API against your own Postgres:
 

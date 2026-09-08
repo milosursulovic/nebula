@@ -3,14 +3,18 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/instance"
 	"github.com/milosursulovic/nebula/internal/job"
+	"github.com/milosursulovic/nebula/internal/metrics"
 	"github.com/milosursulovic/nebula/internal/network"
 	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/internal/provisioning"
@@ -26,6 +30,9 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 
 	r.Get("/health", handleHealth)
 	r.Get("/ready", handleReady(db))
+	// Unauthenticated, same convention as /health and /ready — Prometheus
+	// scrapes this directly, no app-level auth (spec section 35).
+	r.Handle("/metrics", promhttp.Handler())
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Route("/auth", func(r chi.Router) {
@@ -98,11 +105,36 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 		})
 	})
 
+	// otelhttp wraps the whole router (spec section 36) — one root span
+	// per request, named by method+matched-route-pattern once chi has
+	// resolved it, with context propagation set up automatically so any
+	// span created deeper in the call stack (DB, job enqueue, etc.)
+	// nests under it.
+	handler := otelhttp.NewHandler(r, "nebula-api",
+		otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
+			return r.Method + " " + routePattern(r)
+		}),
+	)
+
 	return &http.Server{
 		Addr:              addr,
-		Handler:           r,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+}
+
+// routePattern returns chi's matched route pattern (e.g.
+// "/api/v1/instances/{id}"), not the raw request path — used for the
+// Prometheus path label and trace span name so per-ID paths don't
+// explode cardinality. Only valid to call after chi has finished routing
+// (i.e. after the inner handler has run).
+func routePattern(r *http.Request) string {
+	if rctx := chi.RouteContext(r.Context()); rctx != nil {
+		if p := rctx.RoutePattern(); p != "" {
+			return p
+		}
+	}
+	return r.URL.Path
 }
 
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
@@ -111,11 +143,18 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 			start := time.Now()
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r)
+			duration := time.Since(start)
+
+			path := routePattern(r)
+			status := strconv.Itoa(ww.Status())
+			metrics.APIRequestsTotal.WithLabelValues(r.Method, path, status).Inc()
+			metrics.APIRequestDuration.WithLabelValues(r.Method, path).Observe(duration.Seconds())
+
 			logger.Info("http request",
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", ww.Status(),
-				"duration_ms", time.Since(start).Milliseconds(),
+				"duration_ms", duration.Milliseconds(),
 			)
 		})
 	}

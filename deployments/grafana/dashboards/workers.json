@@ -1,0 +1,26 @@
+{
+  "uid": "nebula-workers",
+  "title": "NEBULA / Workers",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Worker pool throughput (jobs/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(nebula_jobs_total[1m]))", "refId": "A", "legendFormat": "throughput" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Retry rate by type",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(nebula_jobs_total{status=\"retry\"}[5m])) by (type)", "refId": "A", "legendFormat": "{{type}}" }
+      ]
+    }
+  ]
+}

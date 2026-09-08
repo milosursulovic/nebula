@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/milosursulovic/nebula/internal/common"
+	"github.com/milosursulovic/nebula/internal/metrics"
 )
 
 // RegisterResult is what Register hands back: the created node plus the
@@ -106,6 +107,8 @@ func (s *service) Heartbeat(ctx context.Context, id string, in HeartbeatInput) e
 	if err := s.repo.UpdateHeartbeat(ctx, id, in.LoadAverage, in.RunningInstances, StatusOnline); err != nil {
 		return err
 	}
+	metrics.NodeCPUUsage.WithLabelValues(id).Set(in.CPUUsage)
+	metrics.NodeMemoryUsage.WithLabelValues(id).Set(float64(in.MemoryUsedMB))
 	s.logger.Info("node heartbeat received",
 		"node_id", id,
 		"cpu_usage", in.CPUUsage,

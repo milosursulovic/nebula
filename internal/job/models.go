@@ -49,6 +49,12 @@ type Job struct {
 	CreatedAt     time.Time
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
+
+	// TraceContext is the W3C traceparent captured when this job was
+	// enqueued (spec section 36) — the worker extracts it back into the
+	// handler's context so the saga's spans land as children of the
+	// original HTTP request's trace, not a disconnected new one.
+	TraceContext *string
 }
 
 // computeBackoff returns the delay before retrying the given (1-based)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -13,6 +15,12 @@ import (
 
 	"github.com/milosursulovic/nebula/internal/agentpb"
 )
+
+// tracer's spans are the "Agent -> libvirt" hop of spec section 36's
+// trace chain — otelgrpc's server stats handler continues the caller's
+// trace automatically; this wraps each RPC's actual hypervisor/disk-store
+// call as one child span of it.
+var tracer = otel.Tracer("nebula-agent")
 
 // grpcServer implements agentpb.NebulaAgentServer over a Hypervisor (spec
 // section 30) — MockHypervisor by default, LibvirtHypervisor when built
@@ -43,11 +51,27 @@ func NewServer(addr, certFile, keyFile string, hypervisor Hypervisor, disks *Dis
 		return nil, nil, err
 	}
 
-	srv := grpc.NewServer(grpc.Creds(creds))
+	srv := grpc.NewServer(
+		grpc.Creds(creds),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{hypervisor: hypervisor, disks: disks})
 	reflection.Register(srv)
 
 	return srv, lis, nil
+}
+
+// withSpan runs fn as a child span named name, continuing whatever trace
+// otelgrpc's server handler already attached to ctx.
+func withSpan(ctx context.Context, name string, fn func(context.Context) error) error {
+	ctx, span := tracer.Start(ctx, name)
+	defer span.End()
+
+	err := fn(ctx)
+	if err != nil {
+		span.RecordError(err)
+	}
+	return err
 }
 
 func (g *grpcServer) GetNodeInfo(ctx context.Context, _ *agentpb.GetNodeInfoRequest) (*agentpb.GetNodeInfoResponse, error) {
@@ -79,21 +103,30 @@ func (g *grpcServer) CreateVM(ctx context.Context, req *agentpb.CreateVMRequest)
 		DiskGB:     int(req.GetDiskGb()),
 		Image:      req.GetImage(),
 	}
-	if err := g.hypervisor.CreateVM(ctx, spec); err != nil {
+	err := withSpan(ctx, "hypervisor.CreateVM", func(ctx context.Context) error {
+		return g.hypervisor.CreateVM(ctx, spec)
+	})
+	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &agentpb.CreateVMResponse{InstanceId: spec.InstanceID, Status: string(VMStatusStopped)}, nil
 }
 
 func (g *grpcServer) DeleteVM(ctx context.Context, req *agentpb.DeleteVMRequest) (*agentpb.DeleteVMResponse, error) {
-	if err := g.hypervisor.DeleteVM(ctx, req.GetInstanceId()); err != nil {
+	err := withSpan(ctx, "hypervisor.DeleteVM", func(ctx context.Context) error {
+		return g.hypervisor.DeleteVM(ctx, req.GetInstanceId())
+	})
+	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &agentpb.DeleteVMResponse{}, nil
 }
 
 func (g *grpcServer) StartVM(ctx context.Context, req *agentpb.StartVMRequest) (*agentpb.StartVMResponse, error) {
-	if err := g.hypervisor.StartVM(ctx, req.GetInstanceId()); err != nil {
+	err := withSpan(ctx, "hypervisor.StartVM", func(ctx context.Context) error {
+		return g.hypervisor.StartVM(ctx, req.GetInstanceId())
+	})
+	if err != nil {
 		return nil, vmError(err)
 	}
 	vm, err := g.hypervisor.GetVMStatus(ctx, req.GetInstanceId())
@@ -104,7 +137,10 @@ func (g *grpcServer) StartVM(ctx context.Context, req *agentpb.StartVMRequest) (
 }
 
 func (g *grpcServer) StopVM(ctx context.Context, req *agentpb.StopVMRequest) (*agentpb.StopVMResponse, error) {
-	if err := g.hypervisor.StopVM(ctx, req.GetInstanceId()); err != nil {
+	err := withSpan(ctx, "hypervisor.StopVM", func(ctx context.Context) error {
+		return g.hypervisor.StopVM(ctx, req.GetInstanceId())
+	})
+	if err != nil {
 		return nil, vmError(err)
 	}
 	vm, err := g.hypervisor.GetVMStatus(ctx, req.GetInstanceId())
@@ -140,7 +176,12 @@ func (g *grpcServer) CreateDisk(ctx context.Context, req *agentpb.CreateDiskRequ
 	if req.GetDiskId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "disk_id is required")
 	}
-	path, err := g.disks.Create(req.GetDiskId(), int(req.GetSizeGb()))
+	var path string
+	err := withSpan(ctx, "diskStore.Create", func(ctx context.Context) error {
+		var err error
+		path, err = g.disks.Create(req.GetDiskId(), int(req.GetSizeGb()))
+		return err
+	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -148,14 +189,20 @@ func (g *grpcServer) CreateDisk(ctx context.Context, req *agentpb.CreateDiskRequ
 }
 
 func (g *grpcServer) DeleteDisk(ctx context.Context, req *agentpb.DeleteDiskRequest) (*agentpb.DeleteDiskResponse, error) {
-	if err := g.disks.Delete(req.GetDiskId()); err != nil {
+	err := withSpan(ctx, "diskStore.Delete", func(ctx context.Context) error {
+		return g.disks.Delete(req.GetDiskId())
+	})
+	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return &agentpb.DeleteDiskResponse{}, nil
 }
 
 func (g *grpcServer) ResizeDisk(ctx context.Context, req *agentpb.ResizeDiskRequest) (*agentpb.ResizeDiskResponse, error) {
-	if err := g.disks.Resize(req.GetDiskId(), int(req.GetNewSizeGb())); err != nil {
+	err := withSpan(ctx, "diskStore.Resize", func(ctx context.Context) error {
+		return g.disks.Resize(req.GetDiskId(), int(req.GetNewSizeGb()))
+	})
+	if err != nil {
 		return nil, diskError(err)
 	}
 	return &agentpb.ResizeDiskResponse{}, nil

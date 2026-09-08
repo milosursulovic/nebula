@@ -25,6 +25,7 @@ type Config struct {
 	HypervisorBackend string
 	LibvirtURI        string
 	DiskRoot          string
+	OTLPEndpoint      string
 }
 
 // Load reads configuration from the environment and validates it, failing
@@ -97,6 +98,7 @@ func Load() (Config, error) {
 		HypervisorBackend: getEnv("NEBULA_AGENT_HYPERVISOR", "mock"),
 		LibvirtURI:        getEnv("NEBULA_AGENT_LIBVIRT_URI", "qemu:///system"),
 		DiskRoot:          getEnv("NEBULA_AGENT_DISK_ROOT", "/var/lib/nebula/disks"),
+		OTLPEndpoint:      getEnv("NEBULA_OTLP_ENDPOINT", "http://jaeger:4318"),
 	}, nil
 }
 

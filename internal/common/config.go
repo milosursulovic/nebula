@@ -18,6 +18,7 @@ type Config struct {
 	AgentPort           string
 	NodeBootstrapSecret string
 	AgentTLSCAFile      string
+	OTLPEndpoint        string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -38,6 +39,7 @@ func Load() (Config, error) {
 		AgentPort:           getEnv("NEBULA_AGENT_PORT", "7071"),
 		NodeBootstrapSecret: os.Getenv("NEBULA_NODE_BOOTSTRAP_SECRET"),
 		AgentTLSCAFile:      os.Getenv("NEBULA_AGENT_TLS_CA_FILE"),
+		OTLPEndpoint:        getEnv("NEBULA_OTLP_ENDPOINT", "http://jaeger:4318"),
 	}
 
 	if cfg.DatabaseURL == "" {

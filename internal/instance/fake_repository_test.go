@@ -107,3 +107,14 @@ func (f *fakeRepository) SetIPAddress(ctx context.Context, tenantID, id, ip stri
 	f.instances[id] = i
 	return i, nil
 }
+
+func (f *fakeRepository) CountByStatus(ctx context.Context) (map[string]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	counts := make(map[string]int)
+	for _, i := range f.instances {
+		counts[string(i.Status)]++
+	}
+	return counts, nil
+}

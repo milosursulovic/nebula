@@ -1,0 +1,18 @@
+{
+  "uid": "nebula-instances",
+  "title": "NEBULA / Instances",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Instances by status",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "nebula_instances_total", "refId": "A", "legendFormat": "{{status}}" }
+      ]
+    }
+  ]
+}

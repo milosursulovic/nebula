@@ -53,6 +53,7 @@ services:
       NEBULA_AGENT_PORT: "7071"
       NEBULA_NODE_BOOTSTRAP_SECRET: "dev-only-node-bootstrap-secret-change-me"
       NEBULA_AGENT_TLS_CA_FILE: "/etc/nebula/tls/nebula-agent.crt"
+      NEBULA_OTLP_ENDPOINT: "http://jaeger:4318"
     ports:
       - "8080:8080"
     depends_on:
@@ -79,10 +80,41 @@ services:
       NEBULA_NODE_BOOTSTRAP_SECRET: "dev-only-node-bootstrap-secret-change-me"
       NEBULA_AGENT_TLS_CERT_FILE: "/etc/nebula/tls/nebula-agent.crt"
       NEBULA_AGENT_TLS_KEY_FILE: "/etc/nebula/tls/nebula-agent.key"
+      NEBULA_OTLP_ENDPOINT: "http://jaeger:4318"
     ports:
       - "7071:7071"
     depends_on:
       - nebula-api
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - nebula-api
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
 
 volumes:
   postgres-data:

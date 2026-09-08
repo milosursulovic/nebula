@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	kafka "github.com/segmentio/kafka-go"
 
 	"github.com/milosursulovic/nebula/internal/audit"
@@ -25,6 +26,7 @@ import (
 	"github.com/milosursulovic/nebula/internal/provisioning"
 	"github.com/milosursulovic/nebula/internal/scheduler"
 	"github.com/milosursulovic/nebula/internal/storage"
+	"github.com/milosursulovic/nebula/internal/tracing"
 	"github.com/milosursulovic/nebula/pkg/api"
 )
 
@@ -45,6 +47,18 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+
+	tp, err := tracing.NewProvider(ctx, "nebula-api", cfg.OTLPEndpoint)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.Shutdown(shutdownCtx); err != nil {
+			logger.Error("tracer provider shutdown failed", "error", err)
+		}
+	}()
 
 	pool, err := common.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -69,6 +83,7 @@ func run(logger *slog.Logger) error {
 
 	instanceRepo := instance.NewRepository(pool)
 	instanceSvc := instance.NewService(instanceRepo)
+	prometheus.MustRegister(instance.NewMetricsCollector(instanceRepo, logger))
 
 	networkRepo := network.NewRepository(pool)
 	networkSvc := network.NewService(networkRepo)
@@ -124,6 +139,7 @@ func run(logger *slog.Logger) error {
 		ErrorLogger: kafkaErrorLogger(logger),
 	})
 	defer kafkaReader.Close()
+	prometheus.MustRegister(&kafkaLagCollector{reader: kafkaReader})
 
 	outboxRepo := outbox.NewRepository(pool)
 	outboxPublisher := outbox.NewPublisher(outboxRepo, kafkaWriter, logger)
@@ -170,6 +186,29 @@ func run(logger *slog.Logger) error {
 	wg.Wait()
 	logger.Info("nebula-api stopped cleanly")
 	return nil
+}
+
+var kafkaConsumerLagDesc = prometheus.NewDesc(
+	"nebula_kafka_consumer_lag",
+	"Lag (unread messages) for the nebula-audit consumer group, spec section 35.",
+	nil, nil,
+)
+
+// kafkaLagCollector is a live prometheus.Collector wrapping the audit
+// consumer's *kafka.Reader — queried at scrape time (kafka-go's Stats() is
+// cheap/synchronous) rather than pushed, same idiom as
+// instance.metricsCollector.
+type kafkaLagCollector struct {
+	reader *kafka.Reader
+}
+
+func (c *kafkaLagCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- kafkaConsumerLagDesc
+}
+
+func (c *kafkaLagCollector) Collect(ch chan<- prometheus.Metric) {
+	stats := c.reader.Stats()
+	ch <- prometheus.MustNewConstMetric(kafkaConsumerLagDesc, prometheus.GaugeValue, float64(stats.Lag))
 }
 
 func kafkaDebugLogger(logger *slog.Logger) kafka.LoggerFunc {

@@ -7,9 +7,29 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/milosursulovic/nebula/internal/outbox"
 )
+
+// traceparentFromContext captures ctx's current span (the HTTP request's,
+// via otelhttp middleware) as a W3C traceparent string, so a later,
+// disconnected process (the job worker, possibly seconds away and a
+// different goroutine entirely) can continue the same trace (spec section
+// 36: "you should be able to... follow POST /instances through the
+// entire provisioning pipeline"). Returns nil if there's no active span
+// to capture (e.g. tracing isn't configured), so the column stays NULL
+// rather than an empty string.
+func traceparentFromContext(ctx context.Context) *string {
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	tp, ok := carrier["traceparent"]
+	if !ok || tp == "" {
+		return nil
+	}
+	return &tp
+}
 
 // These mirror internal/job's Type/Status/DefaultMaxAttempts constants.
 // Duplicated as literals rather than imported so internal/instance doesn't
@@ -60,6 +80,11 @@ type Repository interface {
 	// SetIPAddress records the IP the saga's network step allocated for
 	// this instance. Same shape/guard as SetNodeID.
 	SetIPAddress(ctx context.Context, tenantID, id, ip string) (Instance, error)
+
+	// CountByStatus counts instances across all tenants, grouped by
+	// status — an observability-only query (Phase 14's nebula_instances_
+	// total gauge), never exposed on the tenant-facing API.
+	CountByStatus(ctx context.Context) (map[string]int, error)
 }
 
 type pgxRepository struct {
@@ -107,9 +132,9 @@ func (r *pgxRepository) CreateWithJob(ctx context.Context, in Instance) (Instanc
 		}
 
 		_, err = tx.Exec(ctx, `
-			INSERT INTO jobs (type, status, tenant_id, instance_id, max_attempts)
-			VALUES ($1, $2, $3, $4, $5)`,
-			createInstanceJobType, jobStatusQueued, created.TenantID, created.ID, jobDefaultMaxAttempts,
+			INSERT INTO jobs (type, status, tenant_id, instance_id, max_attempts, trace_context)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			createInstanceJobType, jobStatusQueued, created.TenantID, created.ID, jobDefaultMaxAttempts, traceparentFromContext(ctx),
 		)
 		return err
 	})
@@ -214,6 +239,25 @@ func (r *pgxRepository) SetIPAddress(ctx context.Context, tenantID, id, ip strin
 		return Instance{}, errNoRows
 	}
 	return i, err
+}
+
+func (r *pgxRepository) CountByStatus(ctx context.Context) (map[string]int, error) {
+	rows, err := r.pool.Query(ctx, `SELECT status, count(*) FROM instances GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, err
+		}
+		counts[status] = count
+	}
+	return counts, rows.Err()
 }
 
 func isUniqueViolation(err error) bool {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/milosursulovic/nebula/internal/agent"
+	"github.com/milosursulovic/nebula/internal/tracing"
 )
 
 func main() {
@@ -29,6 +30,18 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+
+	tp, err := tracing.NewProvider(ctx, "nebula-agent", cfg.OTLPEndpoint)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.Shutdown(shutdownCtx); err != nil {
+			logger.Error("tracer provider shutdown failed", "error", err)
+		}
+	}()
 
 	hypervisor, err := agent.NewHypervisor(cfg)
 	if err != nil {
