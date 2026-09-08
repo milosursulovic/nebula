@@ -75,12 +75,16 @@ full section.
 | 8 | Provisioning saga (real scheduling/reservation, compensation) | `5f662c7` |
 | 9 | Nebula Agent (registration, heartbeat, real metrics, mock VM ops over real HTTP) | `0040289` |
 | 10 | gRPC + TLS (protobuf via buf, control plane -> agent over gRPC, server-authenticated TLS) | `988674f` |
+| 11 | KVM/libvirt (Hypervisor interface, MockHypervisor, real LibvirtHypervisor gated behind -tags libvirt) | `2be9a7e` |
 
-**Next: Phase 11 — KVM/libvirt** (spec section 65/line 2716). Replaces
-`internal/agent`'s mock `Store` with a real `Hypervisor` interface
-(`MockHypervisor`/`LibvirtHypervisor`, spec section 30) behind the gRPC
-surface Phase 10 just built — the RPC contract shouldn't need to change,
-only what's behind `internal/agent/server.go`'s handlers.
+**Next: Phase 12 — Networking** (spec section 66/line 2742).
+
+**This sandbox has real libvirtd/qemu-kvm** (`libvirt-dev` installed
+Phase 11) — `LibvirtHypervisor` isn't theoretical, it's proven against
+real KVM domains via `make test-libvirt`. Compose still defaults to
+`MockHypervisor` (`NEBULA_AGENT_HYPERVISOR=mock`) — see Phase 11's own
+scope-boundary note in its commit message for why (no `/dev/kvm`
+passthrough into the container this phase).
 
 **Known issue, now reproduced across Phases 8/9/10 (still not root-caused,
 not any one phase's own bug):** the audit Kafka consumer (`internal/
@@ -227,6 +231,24 @@ or as a standalone fix, don't just re-verify around it again.
   `nebula-agent`'s server and `nebula-api`'s client trust config
   (`NEBULA_AGENT_TLS_CA_FILE`) point at the same file — see
   `deployments/certs/README.md`.
+- `LibvirtHypervisor` (`internal/agent/libvirt_hypervisor.go`, `//go:build
+  libvirt`) needs `libvirt-dev` (CGO headers) — not part of the default
+  toolchain, `sudo apt-get install libvirt-dev` needed once. `go mod tidy`
+  (no tags) will strip `libvirt.org/go/libvirt` from `go.mod` since only a
+  tagged file imports it — regenerate with `GOFLAGS=-tags=libvirt go mod
+  tidy` instead (`go mod tidy` itself has no `-tags` flag). Docker images
+  never build with this tag — the shipped `nebula-agent` always runs
+  `MockHypervisor`.
+- A libvirt domain's custom `<metadata>` element MUST be marshaled with
+  its element name itself namespace-prefixed (`<nebula:info
+  xmlns:nebula="...">`), not just a bare element with an `xmlns:` attribute
+  sitting on it (`<info xmlns:nebula="...">` looks namespaced but isn't —
+  libvirt silently drops/ignores it, `GetMetadata` returns nothing back).
+  `internal/agent/libvirt_hypervisor.go`'s `nebulaInfo` struct uses the
+  `xml:"nebula:info"` tag trick on both the `XMLName` field and the parent
+  struct's field tag (they must match exactly or `encoding/xml` refuses
+  to marshal) to get this right — caught by the real-libvirt gated test,
+  not by any mock.
 
 ## Verification checklist per phase
 
