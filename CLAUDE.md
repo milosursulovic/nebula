@@ -81,8 +81,10 @@ full section.
 | 14 | Observability (Prometheus, OpenTelemetry/Jaeger, Grafana dashboards) | `4a2c443` |
 | 15 | CLI (`nebula` binary; tenant list, node drain, instance start/stop endpoints) | `73db331` |
 | 16 | Failure recovery (crashed-mid-saga self-healing, agent hostname reclaim, chaos-tested) | `48ff1cd` |
+| 17 | Performance (benchmarks + pprof for all 6 spec targets, 2 real fixes found) | `bb6afaf` |
 
-**Next: Phase 17 — Performance** (spec section 71/line 2844). Linux
+**Next: Phase 18 — Production Hardening** (spec section 72/line 2875).
+Linux
 bridge/veth/network-namespace device management (spec section 33) and
 real libvirt `<disk>`/`<interface>` device attachment both stay deferred
 — see the Phase 12/13 plans' own scope-boundary notes for why (no
@@ -327,6 +329,23 @@ since a restart clearly does retry and recover fine.
   Verified against a genuinely fast restart (<1s, well inside the 30s
   window) — retries correctly through `409` for ~30-40s until its own
   stale row gets demoted, then reclaims successfully, no container exit.
+- Running anything Kafka-related directly from the **host** (not from
+  inside a container on the compose network) fails past the initial
+  connection: `KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092` means
+  the broker tells every client "reconnect to `kafka:9092`" as part of
+  its own metadata/produce/consume protocol, and `kafka` only resolves
+  inside the Docker network — `localhost:9092` works for the *first*
+  connection (topic creation, initial dial) but real produce/consume
+  calls fail with `dial tcp: lookup kafka: ...`. Phase 17 hit this
+  writing Kafka benchmarks; worked around by running them inside a
+  throwaway container on `compose_default`
+  (`docker run --rm --network compose_default -v "$(pwd)":/src -w /src
+  -e NEBULA_KAFKA_BROKERS=kafka:9092 golang:1.26 go test -bench=. ...`)
+  rather than adding a second advertised listener to the shared compose
+  file for one-off host convenience. If a future phase needs routine
+  host-side Kafka access, add a proper dual-listener config
+  (`PLAINTEXT_HOST` on a separate port) instead of re-solving this
+  ad hoc each time.
 - Grafana's host port `3000` isn't reserved by anything in this repo —
   on this particular dev machine it collided with an unrelated
   `pingvin-share-x` container already bound to `3000` (Phase 14
