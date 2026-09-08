@@ -76,8 +76,14 @@ full section.
 | 9 | Nebula Agent (registration, heartbeat, real metrics, mock VM ops over real HTTP) | `0040289` |
 | 10 | gRPC + TLS (protobuf via buf, control plane -> agent over gRPC, server-authenticated TLS) | `988674f` |
 | 11 | KVM/libvirt (Hypervisor interface, MockHypervisor, real LibvirtHypervisor gated behind -tags libvirt) | `2be9a7e` |
+| 12 | Networking (network/subnet/IPAM, real saga integration, instance ip_address) | `af37aca` |
 
-**Next: Phase 12 — Networking** (spec section 66/line 2742).
+**Next: Phase 13 — Storage** (spec section 67/line 2765). Real disks —
+the saga's `createDisk`/`deleteDisk` steps are still `MockSteps` (see
+`internal/provisioning/mocks.go`), same shape Phase 12 replaced for
+network. Linux bridge/veth/network-namespace device management (spec
+section 33) also stays deferred past Phase 12 — see its own scope-
+boundary note below and in the Phase 12 commit message.
 
 **This sandbox has real libvirtd/qemu-kvm** (`libvirt-dev` installed
 Phase 11) — `LibvirtHypervisor` isn't theoretical, it's proven against
@@ -178,11 +184,15 @@ or as a standalone fix, don't just re-verify around it again.
   needs to call into `nebula-api` before Phase 10.
 - Concurrency: optimistic (version column + jittered retry) for resource
   reservation (`node.Reserve`/`Release`); row-locking
-  (`SELECT ... FOR UPDATE SKIP LOCKED`) for queue-claiming (job dispatch).
-  Different tool for a different concurrency problem — don't default to
-  one pattern everywhere; the mandatory concurrency test (Phase 5) is what
-  caught the first version of the retry budget being wrong, so don't skip
-  writing one when adding a new contended operation.
+  (`SELECT ... FOR UPDATE SKIP LOCKED`) for queue-claiming — job dispatch,
+  and (Phase 12) IPAM's `AllocateForInstance` claiming one `AVAILABLE`
+  `ip_addresses` row the same way. Different tool for a different
+  concurrency problem — don't default to one pattern everywhere; when a
+  new contended operation is really "claim any one of many interchangeable
+  rows," reach for the row-locking pattern rather than inventing a third
+  one. The mandatory concurrency test (Phase 5, and now Phase 12's
+  `internal/network/ip_allocation_concurrency_test.go`) is what proves it
+  — don't skip writing one when adding a new contended operation.
 - `internal/common/config.go`: only add an env var once something in that
   same phase actually reads it. Don't add config ahead of its consumer.
 - `deployments/compose/docker-compose.yml` grows incrementally — one file,
@@ -249,6 +259,19 @@ or as a standalone fix, don't just re-verify around it again.
   struct's field tag (they must match exactly or `encoding/xml` refuses
   to marshal) to get this right — caught by the real-libvirt gated test,
   not by any mock.
+- Reading a Postgres `inet` column: `pgx` v5's inet codec only scans into
+  `netip.Addr`/`netip.Prefix`, never `*string`, so `SELECT
+  some_inet_column` into a Go `string` needs an explicit SQL-side
+  conversion — but use `host(col)`, not `col::text`. The bare cast
+  renders a single address as `"10.20.0.2/32"` (netmask included); `host()`
+  strips it to `"10.20.0.2"`. Same asymmetry applies writing an `inet`
+  column via `CopyFrom` (needs an actual `netip.Addr` value, since
+  `CopyFrom` is binary-only and `string` has no inet binary-encode plan)
+  vs. a plain parameterized `INSERT`/`UPDATE` (a Go `string` parameter
+  with an explicit `$N::inet` cast works fine there). Verified/caught
+  this exact `/32` bug via the real `nebula-verifier` walkthrough in
+  Phase 12 — the fake-repository unit tests never touch real Postgres so
+  they can't catch inet-rendering quirks like this.
 
 ## Verification checklist per phase
 
