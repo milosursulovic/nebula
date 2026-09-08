@@ -80,8 +80,9 @@ full section.
 | 13 | Storage (real sparse-file disks, agent gRPC disk RPCs, saga integration, attach/detach/resize API) | `d45209a` |
 | 14 | Observability (Prometheus, OpenTelemetry/Jaeger, Grafana dashboards) | `4a2c443` |
 | 15 | CLI (`nebula` binary; tenant list, node drain, instance start/stop endpoints) | `73db331` |
+| 16 | Failure recovery (crashed-mid-saga self-healing, agent hostname reclaim, chaos-tested) | `48ff1cd` |
 
-**Next: Phase 16 — Failure Recovery** (spec section 70/line 2825). Linux
+**Next: Phase 17 — Performance** (spec section 71/line 2844). Linux
 bridge/veth/network-namespace device management (spec section 33) and
 real libvirt `<disk>`/`<interface>` device attachment both stay deferred
 — see the Phase 12/13 plans' own scope-boundary notes for why (no
@@ -95,22 +96,23 @@ real KVM domains via `make test-libvirt`. Compose still defaults to
 scope-boundary note in its commit message for why (no `/dev/kvm`
 passthrough into the container this phase).
 
-**Known issue, now reproduced across Phases 8/9/10 (still not root-caused,
-not any one phase's own bug):** the audit Kafka consumer (`internal/
-audit`, reader wired in `cmd/nebula-api/main.go`) can hit `"Unable to
-establish connection to consumer group coordinator... Group Coordinator
-Not Available"` on a fresh `compose up` and then consume **zero** messages
-for several minutes — unlike the job pool/outbox publisher/node monitor,
-it doesn't appear to self-retry the coordinator connection promptly. The
-Phase 10 verification run reproduced a ~5 minute stall with *zero* manual
-Kafka CLI interference (ruling out the "manual probing caused it" theory
-from the Phase 9 notes) — outbox events were published fine the whole
-time, `audit_logs` just stayed empty until the consumer eventually caught
-up. This looks like a real, if slow-to-manifest, bug in `internal/audit`'s
-consumer setup (likely something in its `kafka.ReaderConfig` around
-retry/backoff on the initial coordinator lookup) and deserves a dedicated
-fix pass — next time a phase touches `internal/audit`/`internal/outbox`,
-or as a standalone fix, don't just re-verify around it again.
+**Kafka coordinator-stall issue, narrowed (Phase 16):** the audit
+consumer's `"Group Coordinator Not Available"` stall (reproduced across
+Phases 8/9/10, previously undiagnosed) turns out to correlate with
+**cold-start** conditions — a genuinely fresh `compose up` where the
+topic/consumer-group don't exist on the broker yet. Phase 16's chaos
+testing killed and restarted an already-running Kafka broker (topic and
+group metadata already existed) three separate times and measured
+**~17-33 second** recovery each time (outbox publisher resumed in ~17s,
+audit consumer fully caught up in ~33s) — nothing like the previously
+observed multi-minute stalls. So: a Kafka **restart** self-heals quickly;
+a **first-ever** topic/group creation on a brand new broker is the
+scenario that's still slow and still not root-caused. If a future phase
+needs to actually fix the cold-start case, reproduce it specifically
+(fresh volumes, `docker compose up` from nothing) rather than a
+kill/restart of an already-initialized broker — this phase's timing data
+rules out "consumer never retries the coordinator lookup" as the cause,
+since a restart clearly does retry and recover fine.
 
 ## Workflow for a new phase
 
@@ -297,6 +299,34 @@ or as a standalone fix, don't just re-verify around it again.
   scope to fix. Worth a real fix next time `internal/network`/
   `pkg/api/network_handlers.go` gets touched — `List` would need to join
   subnets same as `Get` does.
+- A `kill -9`/`SIGKILL` of `nebula-api` mid-`CREATE_INSTANCE`-saga (this
+  project has no separate worker binary — job dispatch runs in-process
+  inside `nebula-api`) leaves the instance at `PROVISIONING`, a status
+  with no self-transition in `internal/instance/models.go`'s
+  `allowedTransitions` — every retry would fail identically forever
+  without Phase 16's fix (`Saga.Provision` treats `PROVISIONING` observed
+  at its own entry as a reliable "prior attempt crashed" signal, since
+  that's otherwise unreachable — one job claimed by one worker at a
+  time, normal completion always ends at `RUNNING`/`ERROR` first).
+  Verified via 3 real `SIGKILL`-mid-flight/restart cycles: self-heals to
+  `RUNNING` (or cleanly `ERROR`) every time, zero leaked node capacity.
+  If a future phase adds a new saga step or a new async multi-step
+  workflow elsewhere, check whether it has the same "no self-transition,
+  crash mid-flight = permanent stuck state" trap before assuming a
+  `kill -9` is automatically survivable just because normal-failure
+  compensation exists.
+- `nebula-agent` restarting under the same hostname (Phase 16): the
+  control plane reclaims an `OFFLINE` hostname in place
+  (`node.Repository.ReclaimOffline`, same node ID, fresh token) instead
+  of rejecting it forever, AND the agent's own registrar now retries
+  through a `409` instead of exiting on the first one (a `409` isn't
+  necessarily permanent anymore) — both sides needed the fix; either
+  alone left a real gap (server-only: agent still gives up on the first
+  409 if it retries too fast for the 30s `OFFLINE` window; agent-only:
+  nothing on the server would ever let the retry eventually succeed).
+  Verified against a genuinely fast restart (<1s, well inside the 30s
+  window) — retries correctly through `409` for ~30-40s until its own
+  stale row gets demoted, then reclaims successfully, no container exit.
 - Grafana's host port `3000` isn't reserved by anything in this repo —
   on this particular dev machine it collided with an unrelated
   `pingvin-share-x` container already bound to `3000` (Phase 14
