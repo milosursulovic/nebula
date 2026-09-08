@@ -1,4 +1,6 @@
-<img src="docs/assets/logo.svg" alt="NEBULA logo" width="120" height="120">
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="NEBULA logo" width="120" height="120">
+</p>
 
 # NEBULA
 
