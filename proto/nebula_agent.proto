@@ -13,6 +13,9 @@ service NebulaAgent {
   rpc StartVM(StartVMRequest) returns (StartVMResponse);
   rpc StopVM(StopVMRequest) returns (StopVMResponse);
   rpc GetVMStatus(GetVMStatusRequest) returns (GetVMStatusResponse);
+  rpc CreateDisk(CreateDiskRequest) returns (CreateDiskResponse);
+  rpc DeleteDisk(DeleteDiskRequest) returns (DeleteDiskResponse);
+  rpc ResizeDisk(ResizeDiskRequest) returns (ResizeDiskResponse);
 }
 
 message GetNodeInfoRequest {}
@@ -74,3 +77,26 @@ message GetVMStatusResponse {
   int32 disk_gb = 5;
   string image = 6;
 }
+
+message CreateDiskRequest {
+  string disk_id = 1;
+  int32 size_gb = 2;
+}
+
+message CreateDiskResponse {
+  string disk_id = 1;
+  string path = 2;
+}
+
+message DeleteDiskRequest {
+  string disk_id = 1;
+}
+
+message DeleteDiskResponse {}
+
+message ResizeDiskRequest {
+  string disk_id = 1;
+  int32 new_size_gb = 2;
+}
+
+message ResizeDiskResponse {}

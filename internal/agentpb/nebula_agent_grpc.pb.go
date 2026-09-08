@@ -25,6 +25,9 @@ const (
 	NebulaAgent_StartVM_FullMethodName     = "/nebula.agent.v1.NebulaAgent/StartVM"
 	NebulaAgent_StopVM_FullMethodName      = "/nebula.agent.v1.NebulaAgent/StopVM"
 	NebulaAgent_GetVMStatus_FullMethodName = "/nebula.agent.v1.NebulaAgent/GetVMStatus"
+	NebulaAgent_CreateDisk_FullMethodName  = "/nebula.agent.v1.NebulaAgent/CreateDisk"
+	NebulaAgent_DeleteDisk_FullMethodName  = "/nebula.agent.v1.NebulaAgent/DeleteDisk"
+	NebulaAgent_ResizeDisk_FullMethodName  = "/nebula.agent.v1.NebulaAgent/ResizeDisk"
 )
 
 // NebulaAgentClient is the client API for NebulaAgent service.
@@ -40,6 +43,9 @@ type NebulaAgentClient interface {
 	StartVM(ctx context.Context, in *StartVMRequest, opts ...grpc.CallOption) (*StartVMResponse, error)
 	StopVM(ctx context.Context, in *StopVMRequest, opts ...grpc.CallOption) (*StopVMResponse, error)
 	GetVMStatus(ctx context.Context, in *GetVMStatusRequest, opts ...grpc.CallOption) (*GetVMStatusResponse, error)
+	CreateDisk(ctx context.Context, in *CreateDiskRequest, opts ...grpc.CallOption) (*CreateDiskResponse, error)
+	DeleteDisk(ctx context.Context, in *DeleteDiskRequest, opts ...grpc.CallOption) (*DeleteDiskResponse, error)
+	ResizeDisk(ctx context.Context, in *ResizeDiskRequest, opts ...grpc.CallOption) (*ResizeDiskResponse, error)
 }
 
 type nebulaAgentClient struct {
@@ -110,6 +116,36 @@ func (c *nebulaAgentClient) GetVMStatus(ctx context.Context, in *GetVMStatusRequ
 	return out, nil
 }
 
+func (c *nebulaAgentClient) CreateDisk(ctx context.Context, in *CreateDiskRequest, opts ...grpc.CallOption) (*CreateDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateDiskResponse)
+	err := c.cc.Invoke(ctx, NebulaAgent_CreateDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nebulaAgentClient) DeleteDisk(ctx context.Context, in *DeleteDiskRequest, opts ...grpc.CallOption) (*DeleteDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteDiskResponse)
+	err := c.cc.Invoke(ctx, NebulaAgent_DeleteDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nebulaAgentClient) ResizeDisk(ctx context.Context, in *ResizeDiskRequest, opts ...grpc.CallOption) (*ResizeDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResizeDiskResponse)
+	err := c.cc.Invoke(ctx, NebulaAgent_ResizeDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NebulaAgentServer is the server API for NebulaAgent service.
 // All implementations must embed UnimplementedNebulaAgentServer
 // for forward compatibility.
@@ -123,6 +159,9 @@ type NebulaAgentServer interface {
 	StartVM(context.Context, *StartVMRequest) (*StartVMResponse, error)
 	StopVM(context.Context, *StopVMRequest) (*StopVMResponse, error)
 	GetVMStatus(context.Context, *GetVMStatusRequest) (*GetVMStatusResponse, error)
+	CreateDisk(context.Context, *CreateDiskRequest) (*CreateDiskResponse, error)
+	DeleteDisk(context.Context, *DeleteDiskRequest) (*DeleteDiskResponse, error)
+	ResizeDisk(context.Context, *ResizeDiskRequest) (*ResizeDiskResponse, error)
 	mustEmbedUnimplementedNebulaAgentServer()
 }
 
@@ -150,6 +189,15 @@ func (UnimplementedNebulaAgentServer) StopVM(context.Context, *StopVMRequest) (*
 }
 func (UnimplementedNebulaAgentServer) GetVMStatus(context.Context, *GetVMStatusRequest) (*GetVMStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVMStatus not implemented")
+}
+func (UnimplementedNebulaAgentServer) CreateDisk(context.Context, *CreateDiskRequest) (*CreateDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateDisk not implemented")
+}
+func (UnimplementedNebulaAgentServer) DeleteDisk(context.Context, *DeleteDiskRequest) (*DeleteDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteDisk not implemented")
+}
+func (UnimplementedNebulaAgentServer) ResizeDisk(context.Context, *ResizeDiskRequest) (*ResizeDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResizeDisk not implemented")
 }
 func (UnimplementedNebulaAgentServer) mustEmbedUnimplementedNebulaAgentServer() {}
 func (UnimplementedNebulaAgentServer) testEmbeddedByValue()                     {}
@@ -280,6 +328,60 @@ func _NebulaAgent_GetVMStatus_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NebulaAgent_CreateDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NebulaAgentServer).CreateDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NebulaAgent_CreateDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NebulaAgentServer).CreateDisk(ctx, req.(*CreateDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NebulaAgent_DeleteDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NebulaAgentServer).DeleteDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NebulaAgent_DeleteDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NebulaAgentServer).DeleteDisk(ctx, req.(*DeleteDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NebulaAgent_ResizeDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResizeDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NebulaAgentServer).ResizeDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NebulaAgent_ResizeDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NebulaAgentServer).ResizeDisk(ctx, req.(*ResizeDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NebulaAgent_ServiceDesc is the grpc.ServiceDesc for NebulaAgent service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -310,6 +412,18 @@ var NebulaAgent_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVMStatus",
 			Handler:    _NebulaAgent_GetVMStatus_Handler,
+		},
+		{
+			MethodName: "CreateDisk",
+			Handler:    _NebulaAgent_CreateDisk_Handler,
+		},
+		{
+			MethodName: "DeleteDisk",
+			Handler:    _NebulaAgent_DeleteDisk_Handler,
+		},
+		{
+			MethodName: "ResizeDisk",
+			Handler:    _NebulaAgent_ResizeDisk_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

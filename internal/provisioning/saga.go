@@ -14,11 +14,15 @@ import (
 // reserve resources, create disk, create network, create VM, start VM —
 // compensating in reverse order on any step's failure (spec's own
 // example: Create VM fails -> delete network -> delete disk -> release
-// resources). Resource reservation is real (node.Reserve/Release, wired
-// Phase 8); disk/network steps stay mocked (see mocks.go) — those are
-// Phase 12/13's job. VM steps (Phase 9) call out to the target node's
-// nebula-agent over HTTP (see agent_steps.go) — still a mock VM backend
-// on the agent side, but a real network hop, same as section 27 intends.
+// resources). Every step is real as of Phase 13: resource reservation
+// (node.Reserve/Release, Phase 8), disk (internal/storage-backed sparse
+// files, disk_steps.go, Phase 13), network (internal/network-backed
+// IPAM, network_steps.go, Phase 12), and VM (the target node's
+// nebula-agent over TLS-secured gRPC, agent_steps.go, Phases 9-11 — the
+// agent's own VM backend can still be a mock hypervisor or real
+// libvirt/KVM depending on build). No real libvirt <disk>/<interface>
+// device attachment happens yet — see the Phase 12/13 plans' scope
+// boundary notes for why.
 type Saga struct {
 	instances instance.Service
 	nodes     node.Service
@@ -34,11 +38,12 @@ type Saga struct {
 	startVM       VMStarter
 }
 
-// Steps bundles all seven saga step implementations, letting a caller mix
-// sources (e.g. mocked disk with agent-backed VM ops and IPAM-backed
-// network). This is the only constructor — network can't be meaningfully
-// all-mocked since Phase 12 (it needs a real internal/network.Service);
-// tests construct a Saga literal directly instead (see saga_test.go).
+// Steps bundles all seven saga step implementations. This is the only
+// constructor — every step needs a real backing service as of Phase 13
+// (disk needs internal/storage.Service, network needs
+// internal/network.Service), so there's no meaningful all-mock default
+// left to wrap; tests construct a Saga literal directly instead (see
+// saga_test.go).
 type Steps struct {
 	CreateDisk    DiskCreator
 	DeleteDisk    DiskDeleter
@@ -107,7 +112,7 @@ func (s *Saga) Provision(ctx context.Context, tenantID, instanceID string) error
 		return fail(fmt.Errorf("set node id: %w", err))
 	}
 
-	if err := s.createDisk(ctx, instanceID, inst.DiskGB); err != nil {
+	if err := s.createDisk(ctx, instanceID, tenantID, chosen.ID, inst.DiskGB); err != nil {
 		return fail(fmt.Errorf("create disk: %w", err))
 	}
 	compensations = append(compensations, func(ctx context.Context) {

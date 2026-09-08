@@ -112,3 +112,62 @@ func (a *AgentSteps) StartVM(ctx context.Context, instanceID, nodeID string) err
 	a.logger.Info("provisioning: VM started via agent", "instance_id", instanceID, "node_id", nodeID)
 	return nil
 }
+
+// CreateDiskFile, DeleteDiskFile, and ResizeDiskFile satisfy
+// internal/storage.AgentDiskClient structurally (that interface is
+// package-local to internal/storage — no import needed here, same
+// pattern as internal/scheduler.NodeLister). AgentSteps already has the
+// TLS-gRPC dial logic the VM steps use; these just call the disk RPCs
+// (spec section 34, Phase 13) over the same connection shape.
+
+func (a *AgentSteps) CreateDiskFile(ctx context.Context, nodeID, diskID string, sizeGB int) (string, error) {
+	client, closeConn, err := a.dial(ctx, nodeID)
+	if err != nil {
+		return "", err
+	}
+	defer closeConn()
+
+	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	resp, err := client.CreateDisk(callCtx, &agentpb.CreateDiskRequest{DiskId: diskID, SizeGb: int32(sizeGB)})
+	if err != nil {
+		return "", fmt.Errorf("agent create disk: %w", err)
+	}
+	a.logger.Info("storage: disk created via agent", "disk_id", diskID, "node_id", nodeID)
+	return resp.GetPath(), nil
+}
+
+func (a *AgentSteps) DeleteDiskFile(ctx context.Context, nodeID, diskID string) error {
+	client, closeConn, err := a.dial(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	defer closeConn()
+
+	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	if _, err := client.DeleteDisk(callCtx, &agentpb.DeleteDiskRequest{DiskId: diskID}); err != nil {
+		return fmt.Errorf("agent delete disk: %w", err)
+	}
+	a.logger.Info("storage: disk deleted via agent", "disk_id", diskID, "node_id", nodeID)
+	return nil
+}
+
+func (a *AgentSteps) ResizeDiskFile(ctx context.Context, nodeID, diskID string, newSizeGB int) error {
+	client, closeConn, err := a.dial(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	defer closeConn()
+
+	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	if _, err := client.ResizeDisk(callCtx, &agentpb.ResizeDiskRequest{DiskId: diskID, NewSizeGb: int32(newSizeGB)}); err != nil {
+		return fmt.Errorf("agent resize disk: %w", err)
+	}
+	a.logger.Info("storage: disk resized via agent", "disk_id", diskID, "node_id", nodeID)
+	return nil
+}

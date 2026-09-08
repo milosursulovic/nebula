@@ -90,14 +90,14 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 **Provisioning saga** (`internal/provisioning/`)
 - Drives each `CREATE_INSTANCE` job attempt through: schedule a node →
   reserve its capacity → set `node_id` → create disk → create network →
-  set `ip_address` → create VM → start VM → transition to `RUNNING`. Disk
-  stays a local mock (simulated work, always succeeds) — a real
-  implementation is Phase 13 (Storage)'s job. Resource reservation and
-  network allocation are both real, and VM steps are real gRPC calls
+  set `ip_address` → create VM → start VM → transition to `RUNNING`.
+  Every step is real as of Phase 13 — resource reservation, a `ROOT`
+  disk (real sparse file), an IP allocation, and VM create/start are all
+  genuine calls, not simulated work. VM/disk ops are real gRPC calls
   (TLS-secured) to the target node's `nebula-agent` (see below) — the
-  agent's own VM backend is still mocked (Phase 11/KVM's job), but a
-  real, authenticated network hop happens now, not an in-process
-  function call.
+  agent's own VM hypervisor backend can still be a mock or real
+  libvirt/KVM depending on build (Phase 11), but the network hop and the
+  disk file are real either way.
 - Any step's failure compensates in reverse order — exactly the spec's
   worked example: create VM fails → delete network → delete disk →
   release reservation — then transitions the instance to `ERROR`. A job
@@ -132,6 +132,32 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   nor, yet, a real network interface on a libvirt domain to attach it to
   (Phase 11's domains are still deviceless). Deferred until both exist.
 
+**Storage** (`internal/storage/`)
+- `Disk{Type (ROOT/DATA/BACKUP), SizeGB, InstanceID, NodeID, FilePath}`
+  (spec section 34) — a real sparse file (`os.Create` + `Truncate`, no
+  disk space consumed until written) on the compute node's own
+  filesystem, created/deleted/resized via three new agent gRPC RPCs
+  (`CreateDisk`/`DeleteDisk`/`ResizeDisk`). A disk's `NodeID` is fixed at
+  creation — attaching it to an instance only succeeds if that instance
+  is scheduled on the *same* node (a local file can't jump hosts).
+- Every instance gets a `ROOT` disk automatically, created by the
+  provisioning saga right after node reservation, sized to the
+  instance's requested `disk_gb` — this is Phase 8's `createDisk`/
+  `deleteDisk` mock finally made real, the last of the saga's five steps
+  to get one.
+- Tenant-scoped (like instances, not `SUPER_ADMIN` like nodes/networks):
+  `POST /api/v1/instances/{id}/disks` (`{type, size_gb}`, `DATA`/`BACKUP`
+  only — `ROOT` is saga-automatic), `GET /api/v1/instances/{id}/disks`,
+  `GET /api/v1/disks/{id}`, `POST /api/v1/disks/{id}/attach`
+  (`{instance_id}`), `POST /api/v1/disks/{id}/detach` (rejected for
+  `ROOT`), `POST /api/v1/disks/{id}/resize` (`{size_gb}`, grow-only),
+  `DELETE /api/v1/disks/{id}` (only once detached).
+- No real libvirt `<disk>` device is attached to the VM domain — this
+  phase is the real file + real DB tracking + real saga integration, not
+  device passthrough into the VM. Deferred for the same reason Phase 12
+  deferred real Linux network devices: nothing yet boots from a disk, so
+  there's no way to meaningfully test a real attachment.
+
 **Nebula Agent** (`cmd/nebula-agent`, `internal/agent/`, `internal/agentpb/`)
 - A separate binary that runs on each compute node (spec section 27) — the
   abstraction layer between the control plane and the machine, so
@@ -147,7 +173,9 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   `internal/agentpb/` is generated (via `buf generate`, see `proto/
   nebula_agent.proto`) from spec section 28's `NebulaAgent` service:
   `GetNodeInfo`, `CreateVM`, `DeleteVM`, `StartVM`, `StopVM`,
-  `GetVMStatus`. This is the control-plane → agent direction; Phase 9's
+  `GetVMStatus`, plus (Phase 13) `CreateDisk`/`DeleteDisk`/`ResizeDisk`
+  for real sparse-file disk management (see Storage below). This is the
+  control-plane → agent direction; Phase 9's
   REST version of this same surface is fully replaced, not kept
   alongside. Server reflection is enabled (`grpcurl` works without the
   `.proto` file). TLS is server-authenticated only — the agent presents a

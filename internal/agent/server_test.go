@@ -45,6 +45,40 @@ func newTestClient(t *testing.T) (agentpb.NebulaAgentClient, *Store) {
 	return agentpb.NewNebulaAgentClient(conn), store
 }
 
+// newTestClientWithDisks is newTestClient plus a real DiskStore rooted in
+// a temp dir — a separate helper so the 11 existing VM-focused call sites
+// above don't need to change shape.
+func newTestClientWithDisks(t *testing.T) (agentpb.NebulaAgentClient, *DiskStore) {
+	t.Helper()
+
+	disks, err := NewDiskStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDiskStore: %v", err)
+	}
+
+	srv := grpc.NewServer()
+	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{hypervisor: NewMockHypervisor(NewStore()), disks: disks})
+
+	lis := bufconn.Listen(1024 * 1024)
+	go func() {
+		_ = srv.Serve(lis)
+	}()
+	t.Cleanup(srv.Stop)
+
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	return agentpb.NewNebulaAgentClient(conn), disks
+}
+
 func TestGRPCCreateVM(t *testing.T) {
 	client, _ := newTestClient(t)
 
@@ -164,5 +198,64 @@ func TestGRPCGetNodeInfo(t *testing.T) {
 	_, err := client.GetNodeInfo(context.Background(), &agentpb.GetNodeInfoRequest{})
 	if err != nil && status.Code(err) != codes.Internal {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGRPCCreateDisk(t *testing.T) {
+	client, _ := newTestClientWithDisks(t)
+
+	resp, err := client.CreateDisk(context.Background(), &agentpb.CreateDiskRequest{DiskId: "disk-1", SizeGb: 5})
+	if err != nil {
+		t.Fatalf("CreateDisk: %v", err)
+	}
+	if resp.DiskId != "disk-1" || resp.Path == "" {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestGRPCCreateDiskMissingID(t *testing.T) {
+	client, _ := newTestClientWithDisks(t)
+
+	_, err := client.CreateDisk(context.Background(), &agentpb.CreateDiskRequest{SizeGb: 5})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+func TestGRPCResizeDisk(t *testing.T) {
+	client, _ := newTestClientWithDisks(t)
+	client.CreateDisk(context.Background(), &agentpb.CreateDiskRequest{DiskId: "disk-1", SizeGb: 5})
+
+	if _, err := client.ResizeDisk(context.Background(), &agentpb.ResizeDiskRequest{DiskId: "disk-1", NewSizeGb: 10}); err != nil {
+		t.Fatalf("ResizeDisk: %v", err)
+	}
+}
+
+func TestGRPCResizeDiskNotFound(t *testing.T) {
+	client, _ := newTestClientWithDisks(t)
+
+	_, err := client.ResizeDisk(context.Background(), &agentpb.ResizeDiskRequest{DiskId: "missing", NewSizeGb: 10})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("code = %v, want NotFound", status.Code(err))
+	}
+}
+
+func TestGRPCDeleteDisk(t *testing.T) {
+	client, disks := newTestClientWithDisks(t)
+	client.CreateDisk(context.Background(), &agentpb.CreateDiskRequest{DiskId: "disk-1", SizeGb: 5})
+
+	if _, err := client.DeleteDisk(context.Background(), &agentpb.DeleteDiskRequest{DiskId: "disk-1"}); err != nil {
+		t.Fatalf("DeleteDisk: %v", err)
+	}
+	if err := disks.Resize("disk-1", 1); !errors.Is(err, ErrDiskNotFound) {
+		t.Errorf("expected disk file to be gone after DeleteDisk, resize err = %v", err)
+	}
+}
+
+func TestGRPCDeleteDiskUnknownStillSucceeds(t *testing.T) {
+	client, _ := newTestClientWithDisks(t)
+
+	if _, err := client.DeleteDisk(context.Background(), &agentpb.DeleteDiskRequest{DiskId: "missing"}); err != nil {
+		t.Fatalf("DeleteDisk on unknown id: %v", err)
 	}
 }

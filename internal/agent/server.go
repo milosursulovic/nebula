@@ -16,11 +16,14 @@ import (
 
 // grpcServer implements agentpb.NebulaAgentServer over a Hypervisor (spec
 // section 30) — MockHypervisor by default, LibvirtHypervisor when built
-// with -tags libvirt. This is a transport swap over whichever backend is
-// wired in, not a redesign of either.
+// with -tags libvirt — plus a DiskStore for real sparse-file disk
+// management (spec section 34, Phase 13). VM ops are a transport swap
+// over whichever hypervisor backend is wired in; disk ops are real
+// either way (see disk_store.go's doc comment).
 type grpcServer struct {
 	agentpb.UnimplementedNebulaAgentServer
 	hypervisor Hypervisor
+	disks      *DiskStore
 }
 
 // NewServer builds nebula-agent's TLS-enabled gRPC server, listening on
@@ -29,7 +32,7 @@ type grpcServer struct {
 // cert verification, is explicitly "later"). Server reflection is
 // registered so grpcurl can introspect the service without needing the
 // .proto file on hand.
-func NewServer(addr, certFile, keyFile string, hypervisor Hypervisor) (*grpc.Server, net.Listener, error) {
+func NewServer(addr, certFile, keyFile string, hypervisor Hypervisor, disks *DiskStore) (*grpc.Server, net.Listener, error) {
 	creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
 	if err != nil {
 		return nil, nil, err
@@ -41,7 +44,7 @@ func NewServer(addr, certFile, keyFile string, hypervisor Hypervisor) (*grpc.Ser
 	}
 
 	srv := grpc.NewServer(grpc.Creds(creds))
-	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{hypervisor: hypervisor})
+	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{hypervisor: hypervisor, disks: disks})
 	reflection.Register(srv)
 
 	return srv, lis, nil
@@ -129,6 +132,38 @@ func (g *grpcServer) GetVMStatus(ctx context.Context, req *agentpb.GetVMStatusRe
 func vmError(err error) error {
 	if errors.Is(err, ErrVMNotFound) {
 		return status.Error(codes.NotFound, "no vm for this instance id")
+	}
+	return status.Error(codes.Internal, err.Error())
+}
+
+func (g *grpcServer) CreateDisk(ctx context.Context, req *agentpb.CreateDiskRequest) (*agentpb.CreateDiskResponse, error) {
+	if req.GetDiskId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "disk_id is required")
+	}
+	path, err := g.disks.Create(req.GetDiskId(), int(req.GetSizeGb()))
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &agentpb.CreateDiskResponse{DiskId: req.GetDiskId(), Path: path}, nil
+}
+
+func (g *grpcServer) DeleteDisk(ctx context.Context, req *agentpb.DeleteDiskRequest) (*agentpb.DeleteDiskResponse, error) {
+	if err := g.disks.Delete(req.GetDiskId()); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &agentpb.DeleteDiskResponse{}, nil
+}
+
+func (g *grpcServer) ResizeDisk(ctx context.Context, req *agentpb.ResizeDiskRequest) (*agentpb.ResizeDiskResponse, error) {
+	if err := g.disks.Resize(req.GetDiskId(), int(req.GetNewSizeGb())); err != nil {
+		return nil, diskError(err)
+	}
+	return &agentpb.ResizeDiskResponse{}, nil
+}
+
+func diskError(err error) error {
+	if errors.Is(err, ErrDiskNotFound) {
+		return status.Error(codes.NotFound, "no disk for this id")
 	}
 	return status.Error(codes.Internal, err.Error())
 }

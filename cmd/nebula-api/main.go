@@ -24,6 +24,7 @@ import (
 	"github.com/milosursulovic/nebula/internal/outbox"
 	"github.com/milosursulovic/nebula/internal/provisioning"
 	"github.com/milosursulovic/nebula/internal/scheduler"
+	"github.com/milosursulovic/nebula/internal/storage"
 	"github.com/milosursulovic/nebula/pkg/api"
 )
 
@@ -76,14 +77,18 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	mockSteps := provisioning.NewMockSteps(logger)
 	networkSteps := provisioning.NewNetworkSteps(networkSvc)
 	agentSteps, err := provisioning.NewAgentSteps(nodeSvc, cfg.AgentPort, cfg.AgentTLSCAFile, logger)
 	if err != nil {
 		return err
 	}
+
+	storageRepo := storage.NewRepository(pool)
+	storageSvc := storage.NewService(storageRepo, agentSteps)
+	diskSteps := provisioning.NewDiskSteps(storageSvc)
+
 	saga := provisioning.NewSagaWithSteps(instanceSvc, nodeSvc, schedulerSvc, logger, provisioning.Steps{
-		CreateDisk: mockSteps.CreateDisk, DeleteDisk: mockSteps.DeleteDisk,
+		CreateDisk: diskSteps.CreateDisk, DeleteDisk: diskSteps.DeleteDisk,
 		CreateNetwork: networkSteps.CreateNetwork, DeleteNetwork: networkSteps.DeleteNetwork,
 		CreateVM: agentSteps.CreateVM, DeleteVM: agentSteps.DeleteVM, StartVM: agentSteps.StartVM,
 	})
@@ -138,7 +143,7 @@ func run(logger *slog.Logger) error {
 		auditConsumer.Run(ctx)
 	}()
 
-	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, networkSvc, agentSteps.DeleteVM, networkSteps.DeleteNetwork, logger, cfg.NodeBootstrapSecret)
+	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, networkSvc, storageSvc, agentSteps.DeleteVM, networkSteps.DeleteNetwork, logger, cfg.NodeBootstrapSecret)
 
 	errCh := make(chan error, 1)
 	go func() {

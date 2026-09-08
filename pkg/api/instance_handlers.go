@@ -13,6 +13,7 @@ import (
 	"github.com/milosursulovic/nebula/internal/instance"
 	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/internal/provisioning"
+	"github.com/milosursulovic/nebula/internal/storage"
 )
 
 type createInstanceRequest struct {
@@ -137,7 +138,7 @@ func handleGetInstance(svc instance.Service) http.HandlerFunc {
 	}
 }
 
-func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, logger *slog.Logger) http.HandlerFunc {
+func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, storageSvc storage.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -188,6 +189,14 @@ func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, deleteVM p
 				logger.Error("failed to release ip after instance delete",
 					"instance_id", deleted.ID, "ip_address", *deleted.IPAddress, "error", err)
 			}
+		}
+
+		// The saga's disk step (Phase 13) may have created a ROOT disk
+		// before either of the above ever ran — DeleteForInstance is a
+		// no-op if there isn't one, so this is safe to call unconditionally.
+		if err := storageSvc.DeleteForInstance(r.Context(), deleted.ID); err != nil {
+			logger.Error("failed to delete root disk after instance delete",
+				"instance_id", deleted.ID, "error", err)
 		}
 
 		writeJSON(w, http.StatusOK, newInstanceResponse(deleted))

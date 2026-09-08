@@ -661,6 +661,278 @@ func (x *GetVMStatusResponse) GetImage() string {
 	return ""
 }
 
+type CreateDiskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DiskId        string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	SizeGb        int32                  `protobuf:"varint,2,opt,name=size_gb,json=sizeGb,proto3" json:"size_gb,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateDiskRequest) Reset() {
+	*x = CreateDiskRequest{}
+	mi := &file_nebula_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateDiskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateDiskRequest) ProtoMessage() {}
+
+func (x *CreateDiskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nebula_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateDiskRequest.ProtoReflect.Descriptor instead.
+func (*CreateDiskRequest) Descriptor() ([]byte, []int) {
+	return file_nebula_agent_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CreateDiskRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+func (x *CreateDiskRequest) GetSizeGb() int32 {
+	if x != nil {
+		return x.SizeGb
+	}
+	return 0
+}
+
+type CreateDiskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DiskId        string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateDiskResponse) Reset() {
+	*x = CreateDiskResponse{}
+	mi := &file_nebula_agent_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateDiskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateDiskResponse) ProtoMessage() {}
+
+func (x *CreateDiskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nebula_agent_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateDiskResponse.ProtoReflect.Descriptor instead.
+func (*CreateDiskResponse) Descriptor() ([]byte, []int) {
+	return file_nebula_agent_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CreateDiskResponse) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+func (x *CreateDiskResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type DeleteDiskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DiskId        string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteDiskRequest) Reset() {
+	*x = DeleteDiskRequest{}
+	mi := &file_nebula_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteDiskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteDiskRequest) ProtoMessage() {}
+
+func (x *DeleteDiskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nebula_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteDiskRequest.ProtoReflect.Descriptor instead.
+func (*DeleteDiskRequest) Descriptor() ([]byte, []int) {
+	return file_nebula_agent_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *DeleteDiskRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+type DeleteDiskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteDiskResponse) Reset() {
+	*x = DeleteDiskResponse{}
+	mi := &file_nebula_agent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteDiskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteDiskResponse) ProtoMessage() {}
+
+func (x *DeleteDiskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nebula_agent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteDiskResponse.ProtoReflect.Descriptor instead.
+func (*DeleteDiskResponse) Descriptor() ([]byte, []int) {
+	return file_nebula_agent_proto_rawDescGZIP(), []int{15}
+}
+
+type ResizeDiskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DiskId        string                 `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	NewSizeGb     int32                  `protobuf:"varint,2,opt,name=new_size_gb,json=newSizeGb,proto3" json:"new_size_gb,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeDiskRequest) Reset() {
+	*x = ResizeDiskRequest{}
+	mi := &file_nebula_agent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeDiskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeDiskRequest) ProtoMessage() {}
+
+func (x *ResizeDiskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nebula_agent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeDiskRequest.ProtoReflect.Descriptor instead.
+func (*ResizeDiskRequest) Descriptor() ([]byte, []int) {
+	return file_nebula_agent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ResizeDiskRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+func (x *ResizeDiskRequest) GetNewSizeGb() int32 {
+	if x != nil {
+		return x.NewSizeGb
+	}
+	return 0
+}
+
+type ResizeDiskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeDiskResponse) Reset() {
+	*x = ResizeDiskResponse{}
+	mi := &file_nebula_agent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeDiskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeDiskResponse) ProtoMessage() {}
+
+func (x *ResizeDiskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nebula_agent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeDiskResponse.ProtoReflect.Descriptor instead.
+func (*ResizeDiskResponse) Descriptor() ([]byte, []int) {
+	return file_nebula_agent_proto_rawDescGZIP(), []int{17}
+}
+
 var File_nebula_agent_proto protoreflect.FileDescriptor
 
 const file_nebula_agent_proto_rawDesc = "" +
@@ -713,14 +985,33 @@ const file_nebula_agent_proto_rawDesc = "" +
 	"\x03cpu\x18\x03 \x01(\x05R\x03cpu\x12\x1b\n" +
 	"\tmemory_mb\x18\x04 \x01(\x05R\bmemoryMb\x12\x17\n" +
 	"\adisk_gb\x18\x05 \x01(\x05R\x06diskGb\x12\x14\n" +
-	"\x05image\x18\x06 \x01(\tR\x05image2\xfc\x03\n" +
+	"\x05image\x18\x06 \x01(\tR\x05image\"E\n" +
+	"\x11CreateDiskRequest\x12\x17\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12\x17\n" +
+	"\asize_gb\x18\x02 \x01(\x05R\x06sizeGb\"A\n" +
+	"\x12CreateDiskResponse\x12\x17\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\",\n" +
+	"\x11DeleteDiskRequest\x12\x17\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\"\x14\n" +
+	"\x12DeleteDiskResponse\"L\n" +
+	"\x11ResizeDiskRequest\x12\x17\n" +
+	"\adisk_id\x18\x01 \x01(\tR\x06diskId\x12\x1e\n" +
+	"\vnew_size_gb\x18\x02 \x01(\x05R\tnewSizeGb\"\x14\n" +
+	"\x12ResizeDiskResponse2\x81\x06\n" +
 	"\vNebulaAgent\x12X\n" +
 	"\vGetNodeInfo\x12#.nebula.agent.v1.GetNodeInfoRequest\x1a$.nebula.agent.v1.GetNodeInfoResponse\x12O\n" +
 	"\bCreateVM\x12 .nebula.agent.v1.CreateVMRequest\x1a!.nebula.agent.v1.CreateVMResponse\x12O\n" +
 	"\bDeleteVM\x12 .nebula.agent.v1.DeleteVMRequest\x1a!.nebula.agent.v1.DeleteVMResponse\x12L\n" +
 	"\aStartVM\x12\x1f.nebula.agent.v1.StartVMRequest\x1a .nebula.agent.v1.StartVMResponse\x12I\n" +
 	"\x06StopVM\x12\x1e.nebula.agent.v1.StopVMRequest\x1a\x1f.nebula.agent.v1.StopVMResponse\x12X\n" +
-	"\vGetVMStatus\x12#.nebula.agent.v1.GetVMStatusRequest\x1a$.nebula.agent.v1.GetVMStatusResponseB3Z1github.com/milosursulovic/nebula/internal/agentpbb\x06proto3"
+	"\vGetVMStatus\x12#.nebula.agent.v1.GetVMStatusRequest\x1a$.nebula.agent.v1.GetVMStatusResponse\x12U\n" +
+	"\n" +
+	"CreateDisk\x12\".nebula.agent.v1.CreateDiskRequest\x1a#.nebula.agent.v1.CreateDiskResponse\x12U\n" +
+	"\n" +
+	"DeleteDisk\x12\".nebula.agent.v1.DeleteDiskRequest\x1a#.nebula.agent.v1.DeleteDiskResponse\x12U\n" +
+	"\n" +
+	"ResizeDisk\x12\".nebula.agent.v1.ResizeDiskRequest\x1a#.nebula.agent.v1.ResizeDiskResponseB3Z1github.com/milosursulovic/nebula/internal/agentpbb\x06proto3"
 
 var (
 	file_nebula_agent_proto_rawDescOnce sync.Once
@@ -734,7 +1025,7 @@ func file_nebula_agent_proto_rawDescGZIP() []byte {
 	return file_nebula_agent_proto_rawDescData
 }
 
-var file_nebula_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_nebula_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_nebula_agent_proto_goTypes = []any{
 	(*GetNodeInfoRequest)(nil),  // 0: nebula.agent.v1.GetNodeInfoRequest
 	(*GetNodeInfoResponse)(nil), // 1: nebula.agent.v1.GetNodeInfoResponse
@@ -748,6 +1039,12 @@ var file_nebula_agent_proto_goTypes = []any{
 	(*StopVMResponse)(nil),      // 9: nebula.agent.v1.StopVMResponse
 	(*GetVMStatusRequest)(nil),  // 10: nebula.agent.v1.GetVMStatusRequest
 	(*GetVMStatusResponse)(nil), // 11: nebula.agent.v1.GetVMStatusResponse
+	(*CreateDiskRequest)(nil),   // 12: nebula.agent.v1.CreateDiskRequest
+	(*CreateDiskResponse)(nil),  // 13: nebula.agent.v1.CreateDiskResponse
+	(*DeleteDiskRequest)(nil),   // 14: nebula.agent.v1.DeleteDiskRequest
+	(*DeleteDiskResponse)(nil),  // 15: nebula.agent.v1.DeleteDiskResponse
+	(*ResizeDiskRequest)(nil),   // 16: nebula.agent.v1.ResizeDiskRequest
+	(*ResizeDiskResponse)(nil),  // 17: nebula.agent.v1.ResizeDiskResponse
 }
 var file_nebula_agent_proto_depIdxs = []int32{
 	0,  // 0: nebula.agent.v1.NebulaAgent.GetNodeInfo:input_type -> nebula.agent.v1.GetNodeInfoRequest
@@ -756,14 +1053,20 @@ var file_nebula_agent_proto_depIdxs = []int32{
 	6,  // 3: nebula.agent.v1.NebulaAgent.StartVM:input_type -> nebula.agent.v1.StartVMRequest
 	8,  // 4: nebula.agent.v1.NebulaAgent.StopVM:input_type -> nebula.agent.v1.StopVMRequest
 	10, // 5: nebula.agent.v1.NebulaAgent.GetVMStatus:input_type -> nebula.agent.v1.GetVMStatusRequest
-	1,  // 6: nebula.agent.v1.NebulaAgent.GetNodeInfo:output_type -> nebula.agent.v1.GetNodeInfoResponse
-	3,  // 7: nebula.agent.v1.NebulaAgent.CreateVM:output_type -> nebula.agent.v1.CreateVMResponse
-	5,  // 8: nebula.agent.v1.NebulaAgent.DeleteVM:output_type -> nebula.agent.v1.DeleteVMResponse
-	7,  // 9: nebula.agent.v1.NebulaAgent.StartVM:output_type -> nebula.agent.v1.StartVMResponse
-	9,  // 10: nebula.agent.v1.NebulaAgent.StopVM:output_type -> nebula.agent.v1.StopVMResponse
-	11, // 11: nebula.agent.v1.NebulaAgent.GetVMStatus:output_type -> nebula.agent.v1.GetVMStatusResponse
-	6,  // [6:12] is the sub-list for method output_type
-	0,  // [0:6] is the sub-list for method input_type
+	12, // 6: nebula.agent.v1.NebulaAgent.CreateDisk:input_type -> nebula.agent.v1.CreateDiskRequest
+	14, // 7: nebula.agent.v1.NebulaAgent.DeleteDisk:input_type -> nebula.agent.v1.DeleteDiskRequest
+	16, // 8: nebula.agent.v1.NebulaAgent.ResizeDisk:input_type -> nebula.agent.v1.ResizeDiskRequest
+	1,  // 9: nebula.agent.v1.NebulaAgent.GetNodeInfo:output_type -> nebula.agent.v1.GetNodeInfoResponse
+	3,  // 10: nebula.agent.v1.NebulaAgent.CreateVM:output_type -> nebula.agent.v1.CreateVMResponse
+	5,  // 11: nebula.agent.v1.NebulaAgent.DeleteVM:output_type -> nebula.agent.v1.DeleteVMResponse
+	7,  // 12: nebula.agent.v1.NebulaAgent.StartVM:output_type -> nebula.agent.v1.StartVMResponse
+	9,  // 13: nebula.agent.v1.NebulaAgent.StopVM:output_type -> nebula.agent.v1.StopVMResponse
+	11, // 14: nebula.agent.v1.NebulaAgent.GetVMStatus:output_type -> nebula.agent.v1.GetVMStatusResponse
+	13, // 15: nebula.agent.v1.NebulaAgent.CreateDisk:output_type -> nebula.agent.v1.CreateDiskResponse
+	15, // 16: nebula.agent.v1.NebulaAgent.DeleteDisk:output_type -> nebula.agent.v1.DeleteDiskResponse
+	17, // 17: nebula.agent.v1.NebulaAgent.ResizeDisk:output_type -> nebula.agent.v1.ResizeDiskResponse
+	9,  // [9:18] is the sub-list for method output_type
+	0,  // [0:9] is the sub-list for method input_type
 	0,  // [0:0] is the sub-list for extension type_name
 	0,  // [0:0] is the sub-list for extension extendee
 	0,  // [0:0] is the sub-list for field type_name
@@ -780,7 +1083,7 @@ func file_nebula_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nebula_agent_proto_rawDesc), len(file_nebula_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

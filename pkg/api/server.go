@@ -14,10 +14,11 @@ import (
 	"github.com/milosursulovic/nebula/internal/network"
 	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/internal/provisioning"
+	"github.com/milosursulovic/nebula/internal/storage"
 )
 
 // NewServer builds the nebula-api HTTP server: router, middleware, and routes.
-func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, networkSvc network.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
+func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, networkSvc network.Service, storageSvc storage.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -62,7 +63,20 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 			r.Post("/", handleCreateInstance(instanceSvc))
 			r.Get("/", handleListInstances(instanceSvc))
 			r.Get("/{id}", handleGetInstance(instanceSvc))
-			r.Delete("/{id}", handleDeleteInstance(instanceSvc, nodeSvc, deleteVM, releaseIP, logger))
+			r.Delete("/{id}", handleDeleteInstance(instanceSvc, nodeSvc, storageSvc, deleteVM, releaseIP, logger))
+
+			r.Post("/{id}/disks", handleCreateDisk(instanceSvc, storageSvc))
+			r.Get("/{id}/disks", handleListInstanceDisks(instanceSvc, storageSvc))
+		})
+
+		r.Route("/disks", func(r chi.Router) {
+			r.Use(auth.Authenticate(tokens))
+
+			r.Get("/{id}", handleGetDisk(storageSvc))
+			r.Delete("/{id}", handleDeleteDisk(storageSvc))
+			r.Post("/{id}/attach", handleAttachDisk(instanceSvc, storageSvc))
+			r.Post("/{id}/detach", handleDetachDisk(storageSvc))
+			r.Post("/{id}/resize", handleResizeDisk(storageSvc))
 		})
 
 		r.Route("/networks", func(r chi.Router) {

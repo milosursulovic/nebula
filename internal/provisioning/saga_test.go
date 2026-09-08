@@ -183,7 +183,9 @@ func recordingSteps(rec *callRecorder, failStep string, failErr error) (
 		}
 		return nil
 	}
-	createDisk = func(ctx context.Context, instanceID string, diskGB int) error { return step("create_disk") }
+	createDisk = func(ctx context.Context, instanceID, tenantID, nodeID string, diskGB int) error {
+		return step("create_disk")
+	}
 	deleteDisk = func(ctx context.Context, instanceID string) error { return step("delete_disk") }
 	createNetwork = func(ctx context.Context, instanceID string) (string, error) {
 		return "10.20.0.99", step("create_network")
