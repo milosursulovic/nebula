@@ -78,15 +78,14 @@ full section.
 | 11 | KVM/libvirt (Hypervisor interface, MockHypervisor, real LibvirtHypervisor gated behind -tags libvirt) | `2be9a7e` |
 | 12 | Networking (network/subnet/IPAM, real saga integration, instance ip_address) | `af37aca` |
 | 13 | Storage (real sparse-file disks, agent gRPC disk RPCs, saga integration, attach/detach/resize API) | `d45209a` |
+| 14 | Observability (Prometheus, OpenTelemetry/Jaeger, Grafana dashboards) | `4a2c443` |
 
-**Next: Phase 14 — Observability** (spec section 68/line 2785). All five
-saga steps are real as of Phase 13 (`internal/provisioning/mocks.go` is
-gone — nothing left to mock). Linux bridge/veth/network-namespace device
-management (spec section 33) and real libvirt `<disk>`/`<interface>`
-device attachment both stay deferred — see the Phase 12/13 plans' own
-scope-boundary notes for why (no `CAP_NET_ADMIN` in this sandbox for the
-former; no bootable OS/image pipeline yet to make either meaningfully
-testable).
+**Next: Phase 15 — CLI** (spec section 69/line 2817). Linux bridge/veth/
+network-namespace device management (spec section 33) and real libvirt
+`<disk>`/`<interface>` device attachment both stay deferred — see the
+Phase 12/13 plans' own scope-boundary notes for why (no `CAP_NET_ADMIN`
+in this sandbox for the former; no bootable OS/image pipeline yet to make
+either meaningfully testable).
 
 **This sandbox has real libvirtd/qemu-kvm** (`libvirt-dev` installed
 Phase 11) — `LibvirtHypervisor` isn't theoretical, it's proven against
@@ -284,6 +283,19 @@ or as a standalone fix, don't just re-verify around it again.
   this exact `/32` bug via the real `nebula-verifier` walkthrough in
   Phase 12 — the fake-repository unit tests never touch real Postgres so
   they can't catch inet-rendering quirks like this.
+- `jaegertracing/all-in-one` has no bare `:1.62`-style minor tag on Docker
+  Hub — only fully-qualified patch tags (`1.62.0`, `1.63.0`, ...) plus
+  `latest`. Compose pins `1.62.0`. If bumping, check the actual published
+  tag list first, not just the minor version scheme other images use.
+- Grafana's host port `3000` isn't reserved by anything in this repo —
+  on this particular dev machine it collided with an unrelated
+  `pingvin-share-x` container already bound to `3000` (Phase 14
+  verification hit this: the `grafana` container stayed in `Created`,
+  never started, while a `curl localhost:3000` silently answered from
+  the *other* container instead — caught only by noticing the response
+  headers didn't say Grafana). Not a bug in this repo; if it recurs, free
+  the port or remap Grafana's host-side port in
+  `deployments/compose/docker-compose.yml`.
 
 ## Verification checklist per phase
 
