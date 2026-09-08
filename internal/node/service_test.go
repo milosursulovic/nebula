@@ -55,6 +55,45 @@ func TestRegisterDuplicateHostname(t *testing.T) {
 	}
 }
 
+// TestRegisterReclaimsOfflineHostname is the regression test for the bug
+// found during Phase 16's chaos testing: a restarted agent (same hostname)
+// used to hit ErrHostnameTaken forever once its node went OFFLINE,
+// exhausting the agent's registration retry budget and leaving it dead
+// permanently. An OFFLINE hostname must be reclaimable.
+func TestRegisterReclaimsOfflineHostname(t *testing.T) {
+	repo := newFakeRepository()
+	svc := NewService(repo, testLogger())
+	ctx := context.Background()
+	in := RegisterInput{Hostname: "compute-01", IP: "10.0.0.11", CPU: 16, MemoryMB: 32768, DiskGB: 1000}
+
+	first, err := svc.Register(ctx, in)
+	if err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+
+	if err := repo.UpdateStatus(ctx, first.Node.ID, StatusOffline); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+
+	second, err := svc.Register(ctx, RegisterInput{Hostname: "compute-01", IP: "10.0.0.12", CPU: 16, MemoryMB: 32768, DiskGB: 1000})
+	if err != nil {
+		t.Fatalf("reclaim Register: %v", err)
+	}
+
+	if second.Node.ID != first.Node.ID {
+		t.Errorf("reclaim got a new node ID %q, want the same node %q reused", second.Node.ID, first.Node.ID)
+	}
+	if second.Node.Status != StatusOnline {
+		t.Errorf("Status after reclaim = %q, want %q", second.Node.Status, StatusOnline)
+	}
+	if second.Node.IP != "10.0.0.12" {
+		t.Errorf("IP after reclaim = %q, want the newly-registered IP", second.Node.IP)
+	}
+	if second.NodeToken == "" || second.NodeToken == first.NodeToken {
+		t.Error("expected a fresh, different node token on reclaim")
+	}
+}
+
 func TestGetNotFound(t *testing.T) {
 	svc := newTestService()
 

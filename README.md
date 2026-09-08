@@ -47,6 +47,13 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   `NEBULA_NODE_BOOTSTRAP_SECRET` bearer token (how an unattended
   `nebula-agent` registers itself, spec section 10) or a `SUPER_ADMIN` JWT
   (manual/human registration). Returns a one-time opaque `node_token`.
+  A hostname whose existing row is `OFFLINE` is reclaimed in place (same
+  node ID, fresh token, back to `ONLINE`) rather than rejected — a
+  restarted agent registers under the same hostname it always has, so
+  without this a node that ever went offline could never come back
+  (rejected forever, its agent process exhausting its registration retry
+  budget and exiting for good). A hostname still held by a live
+  (`ONLINE`/`DEGRADED`/`DRAINING`) node is still rejected as before.
 - `GET /api/v1/nodes`, `GET /api/v1/nodes/{id}` — gated by
   `RequireRole(SUPER_ADMIN)`.
 - `POST /api/v1/nodes/{id}/heartbeat` — authenticated with that node token
@@ -123,6 +130,21 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   retry re-invokes the saga from scratch, re-scheduling fresh (possibly
   onto a different node) rather than assuming the prior choice still
   holds.
+- **Crash recovery**: this system has no separate worker binary — job
+  dispatch runs in-process inside `nebula-api`, so a hard kill of
+  `nebula-api` mid-saga (not a graceful shutdown) can leave an instance
+  sitting at `PROVISIONING` with whatever it reserved before dying never
+  released (the crash skips the normal compensation code entirely).
+  `job.Pool`'s existing orphaned-job requeue (Phase 6) hands the
+  interrupted job back to a worker on restart — `Saga.Provision` detects
+  `PROVISIONING` at its own entry as the reliable "a prior attempt for
+  this instance crashed" signal (unreachable any other way: one job is
+  claimed by one worker at a time, and a normal completed attempt always
+  ends at `RUNNING` or `ERROR` first), best-effort releases whatever that
+  attempt left behind, then falls through to the same `ERROR →
+  PROVISIONING` retry path a normal failure already uses — self-healing
+  back to `RUNNING`, or cleanly to `ERROR` if the retry itself fails,
+  rather than stuck forever.
 
 **Networking & IPAM** (`internal/network/`)
 - `Network`/`Subnet` follow AWS VPC/Subnet's 1:many shape (spec section
@@ -181,10 +203,14 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 - A separate binary that runs on each compute node (spec section 27) — the
   abstraction layer between the control plane and the machine, so
   `nebula-api` never executes anything directly on a node.
-- On startup: registers itself with `nebula-api` over REST (retried with
-  backoff — fails fast, no retries, on a permanent `409` like an
-  already-registered hostname) and starts a heartbeat loop, posting real
-  host metrics (CPU% from `/proc/stat` deltas, memory from
+- On startup: registers itself with `nebula-api` over REST, retried with
+  backoff (including through a `409` — since Phase 16, that's not
+  necessarily permanent: the control plane reclaims a hostname once its
+  existing node row goes `OFFLINE`, so a restarted agent racing that
+  30s window just needs to keep trying, same as any other failure; the
+  existing 1s→2s→4s→8s→16s backoff schedule already clears 30s by its
+  6th attempt) and starts a heartbeat loop, posting real host metrics
+  (CPU% from `/proc/stat` deltas, memory from
   `/proc/meminfo`, disk from `statfs`, load average from `/proc/loadavg`)
   every `NEBULA_AGENT_HEARTBEAT_INTERVAL` (default `5s`). This direction
   (agent → control plane) is unchanged since Phase 9.
@@ -221,11 +247,6 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   self-signed cert+key — same "dev-only, change-me" precedent as the
   plaintext `JWT_SECRET`/`NEBULA_NODE_BOOTSTRAP_SECRET` values already in
   `docker-compose.yml`. See `deployments/certs/README.md`.
-- Registration is not idempotent across restarts — a restarted agent with
-  the same hostname gets rejected and exits; recovering it today needs a
-  hostname change or removing the stale `compute_nodes` row by hand
-  (accepted Phase 9 limitation, same idempotency-deferred precedent as
-  instance creation).
 
 **Jobs** (`internal/job/`)
 - A channel-based worker pool (dispatcher goroutine polls PostgreSQL for

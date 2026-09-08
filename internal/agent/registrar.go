@@ -80,18 +80,20 @@ func (r *Registrar) Register(ctx context.Context) error {
 			return nil
 		}
 
-		// 409 (hostname already registered) can never succeed by retrying
-		// the identical request — a restarted agent with the same
-		// hostname hits this every time. Fail fast rather than burning
-		// the whole retry budget on a permanent error (this phase doesn't
-		// solve re-registration on restart — see internal/agent's doc).
-		if status == http.StatusConflict {
-			return fmt.Errorf("registration rejected, hostname %q already registered: %w", r.cfg.Hostname, err)
-		}
-
+		// 409 (hostname already registered) is no longer necessarily
+		// permanent (Phase 16): the control plane reclaims a hostname
+		// once its existing node row goes OFFLINE (30s of missed
+		// heartbeats), so a restarted agent racing that window — its own
+		// prior row not yet demoted — just needs to keep retrying, same
+		// as any other failure. This backoff schedule already clears 30s
+		// well before its budget runs out (1+2+4+8+16=31s by attempt 6),
+		// so no special-casing is needed; a 409 held by a genuinely
+		// still-live node (real hostname collision) correctly exhausts
+		// the same retry budget and fails below, same as any other
+		// unrecoverable error.
 		lastErr = err
 		r.logger.Warn("nebula-agent: registration attempt failed, retrying",
-			"attempt", attempt, "error", err)
+			"attempt", attempt, "status", status, "error", err)
 
 		select {
 		case <-time.After(backoff):

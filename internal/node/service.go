@@ -78,7 +78,7 @@ func (s *service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 	}
 
 	now := time.Now()
-	created, err := s.repo.Create(ctx, Node{
+	node := Node{
 		Hostname:          in.Hostname,
 		IP:                in.IP,
 		Status:            StatusOnline,
@@ -90,9 +90,22 @@ func (s *service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 		AvailableDiskGB:   in.DiskGB,
 		LastHeartbeatAt:   &now,
 		TokenHash:         hash,
-	})
+	}
+
+	// A restarted agent registers under the same hostname it always has —
+	// if that hostname's existing row is OFFLINE, this is that same node
+	// coming back, not a genuine collision. Reclaim it (same node ID, so
+	// any instance still assigned there keeps a valid node_id) rather
+	// than rejecting forever (see ReclaimOffline's doc comment).
+	if reclaimed, ok, err := s.repo.ReclaimOffline(ctx, in.Hostname, node); err != nil {
+		return RegisterResult{}, err
+	} else if ok {
+		return RegisterResult{Node: reclaimed, NodeToken: rawToken}, nil
+	}
+
+	created, err := s.repo.Create(ctx, node)
 	if err != nil {
-		return RegisterResult{}, err // may be ErrHostnameTaken
+		return RegisterResult{}, err // may be ErrHostnameTaken (still ONLINE/DEGRADED/DRAINING)
 	}
 
 	return RegisterResult{Node: created, NodeToken: rawToken}, nil

@@ -39,6 +39,29 @@ func (f *fakeRepository) Create(ctx context.Context, n Node) (Node, error) {
 	return n, nil
 }
 
+func (f *fakeRepository) ReclaimOffline(ctx context.Context, hostname string, n Node) (Node, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for id, existing := range f.nodes {
+		if existing.Hostname != hostname {
+			continue
+		}
+		if existing.Status != StatusOffline {
+			return Node{}, false, nil
+		}
+		existing.IP = n.IP
+		existing.Status = StatusOnline
+		existing.LastHeartbeatAt = n.LastHeartbeatAt
+		existing.TokenHash = n.TokenHash
+		existing.Version++
+		existing.UpdatedAt = time.Now()
+		f.nodes[id] = existing
+		return existing, true, nil
+	}
+	return Node{}, false, nil
+}
+
 func (f *fakeRepository) List(ctx context.Context) ([]Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

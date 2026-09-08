@@ -78,6 +78,25 @@ func (s *Saga) Provision(ctx context.Context, tenantID, instanceID string) error
 		return fmt.Errorf("get instance: %w", err)
 	}
 
+	if inst.Status == instance.StatusProvisioning {
+		// A prior attempt for this same instance started but never
+		// finished — the only way Provision() ever observes PROVISIONING
+		// at its own entry (one job claimed by one worker at a time; a
+		// normal completed attempt always ends at RUNNING or ERROR
+		// first) is that the prior attempt's process died mid-flight
+		// (spec section 46's "worker crash") before it could run its own
+		// compensation. Recover exactly like a normal failed attempt:
+		// best-effort release whatever it left behind, then fall through
+		// to the same ERROR->PROVISIONING retry path a clean failure
+		// already uses below — without this, PROVISIONING has no
+		// self-transition, so every retry would fail identically forever
+		// and the instance would be stuck (unretriable, undeletable).
+		s.compensateLeftovers(ctx, instanceID, inst)
+		if _, err := s.instances.Transition(ctx, tenantID, instanceID, instance.StatusError); err != nil {
+			return fmt.Errorf("recover orphaned provisioning attempt: %w", err)
+		}
+	}
+
 	if _, err := s.instances.Transition(ctx, tenantID, instanceID, instance.StatusProvisioning); err != nil {
 		return fmt.Errorf("transition to PROVISIONING: %w", err)
 	}
@@ -155,4 +174,33 @@ func (s *Saga) Provision(ctx context.Context, tenantID, instanceID string) error
 
 	s.logger.Info("saga: instance provisioned", "instance_id", instanceID, "node_id", chosen.ID)
 	return nil
+}
+
+// compensateLeftovers best-effort releases whatever a crashed prior
+// attempt might have created for this instance, before Provision retries
+// it fresh. Only called once, from the PROVISIONING-at-entry crash signal
+// above — every one of these four calls is independently idempotent-safe
+// when there's nothing to clean up (delete-VM/delete-disk/delete-network
+// all no-op on an already-absent target), EXCEPT node.Release, whose SQL
+// adds capacity back with no clamp against the node's total — calling it
+// twice for the same reservation would silently over-credit a node's
+// available capacity. That's exactly why this only runs once, gated on
+// the crash signal, rather than unconditionally on every retry.
+func (s *Saga) compensateLeftovers(ctx context.Context, instanceID string, inst instance.Instance) {
+	if inst.NodeID == nil {
+		return // never got past scheduling+reserve; nothing to clean up
+	}
+
+	if err := s.deleteVM(ctx, instanceID, *inst.NodeID); err != nil {
+		s.logger.Error("saga recovery: delete vm failed", "instance_id", instanceID, "node_id", *inst.NodeID, "error", err)
+	}
+	if err := s.deleteDisk(ctx, instanceID); err != nil {
+		s.logger.Error("saga recovery: delete disk failed", "instance_id", instanceID, "error", err)
+	}
+	if err := s.deleteNetwork(ctx, instanceID); err != nil {
+		s.logger.Error("saga recovery: delete network failed", "instance_id", instanceID, "error", err)
+	}
+	if _, err := s.nodes.Release(ctx, *inst.NodeID, inst.CPU, inst.MemoryMB, inst.DiskGB); err != nil {
+		s.logger.Error("saga recovery: release node capacity failed", "instance_id", instanceID, "node_id", *inst.NodeID, "error", err)
+	}
 }

@@ -22,6 +22,21 @@ var statusEvent = map[Status]string{
 // Repository is the persistence boundary the node Service depends on.
 type Repository interface {
 	Create(ctx context.Context, n Node) (Node, error)
+
+	// ReclaimOffline re-registers under an existing OFFLINE node's
+	// hostname (spec section 46's "kill agent... verify recovery" —
+	// Phase 16: without this, a restarted agent's Register call hits
+	// Create's unique-hostname constraint forever, exhausts its retry
+	// budget, and exits for good, leaving the node permanently OFFLINE).
+	// Reuses the same node ID (any instance still assigned to it keeps a
+	// valid node_id) and issues a fresh token, but deliberately does NOT
+	// touch available_*  — those still reflect whatever instances the DB
+	// considers assigned there, which this call has no basis to change.
+	// ok=false (no error) means no OFFLINE row matched that hostname —
+	// caller falls back to Create, whose own unique-violation handling
+	// covers "hostname is taken by a still-live node" correctly.
+	ReclaimOffline(ctx context.Context, hostname string, n Node) (Node, bool, error)
+
 	List(ctx context.Context) ([]Node, error)
 	Get(ctx context.Context, id string) (Node, error)
 	FindByTokenHash(ctx context.Context, tokenHash string) (Node, error)
@@ -87,6 +102,25 @@ func (r *pgxRepository) Create(ctx context.Context, n Node) (Node, error) {
 		return Node{}, err
 	}
 	return created, nil
+}
+
+func (r *pgxRepository) ReclaimOffline(ctx context.Context, hostname string, n Node) (Node, bool, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE compute_nodes
+		SET ip = $2, status = 'ONLINE', last_heartbeat_at = $3, token_hash = $4,
+		    version = version + 1, updated_at = now()
+		WHERE hostname = $1 AND status = 'OFFLINE'
+		RETURNING `+selectColumns,
+		hostname, n.IP, n.LastHeartbeatAt, n.TokenHash,
+	)
+	reclaimed, err := scanNode(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Node{}, false, nil
+	}
+	if err != nil {
+		return Node{}, false, err
+	}
+	return reclaimed, true, nil
 }
 
 func (r *pgxRepository) List(ctx context.Context) ([]Node, error) {

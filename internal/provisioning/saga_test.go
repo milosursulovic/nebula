@@ -244,6 +244,70 @@ func TestSagaHappyPath(t *testing.T) {
 	})
 }
 
+// TestSagaRecoversOrphanedProvisioningAttempt simulates the crash scenario
+// Phase 16 exists to fix: a prior Provision() attempt for this instance
+// got as far as reserving a node and creating a disk/network before its
+// process died (kill -9 skips fail()'s compensation entirely) — job.Pool's
+// orphaned-job requeue hands the CREATE_INSTANCE job back to a fresh
+// Provision() call, which finds the instance still sitting at
+// PROVISIONING with NodeID already set. It must clean up the leftover
+// reservation/disk/network exactly once, then retry cleanly through the
+// same ERROR->PROVISIONING path a normal failure already uses.
+func TestSagaRecoversOrphanedProvisioningAttempt(t *testing.T) {
+	rec := &callRecorder{}
+	nodeID := "node-1"
+	orphaned := instance.Instance{
+		ID: "inst-1", TenantID: "tenant-1", CPU: 2, MemoryMB: 4096, DiskGB: 50,
+		Status: instance.StatusProvisioning, NodeID: &nodeID,
+	}
+	insts := newFakeInstances(rec, orphaned)
+	nodes := &fakeNodes{rec: rec}
+	sched := &fakeScheduler{rec: rec, node: node.Node{ID: "node-1"}}
+	saga := newTestSaga(rec, insts, nodes, sched, "", nil)
+
+	if err := saga.Provision(context.Background(), "tenant-1", "inst-1"); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	if insts.status("inst-1") != instance.StatusRunning {
+		t.Errorf("final status = %q, want RUNNING", insts.status("inst-1"))
+	}
+	assertTrace(t, rec, []string{
+		"delete_vm", "delete_disk", "delete_network", "release:node-1", "transition:ERROR",
+		"transition:PROVISIONING", "schedule", "reserve:node-1", "set_node_id:node-1",
+		"create_disk", "create_network", "set_ip_address:10.20.0.99", "create_vm", "start_vm", "transition:RUNNING",
+	})
+}
+
+// TestSagaRecoversOrphanedProvisioningAttemptBeforeReserve covers the
+// earlier crash point: the prior attempt died before ever reserving a
+// node (NodeID still nil) — compensateLeftovers must do nothing (nothing
+// to release), not panic on a nil NodeID, and still recover cleanly.
+func TestSagaRecoversOrphanedProvisioningAttemptBeforeReserve(t *testing.T) {
+	rec := &callRecorder{}
+	orphaned := instance.Instance{
+		ID: "inst-1", TenantID: "tenant-1", CPU: 2, MemoryMB: 4096, DiskGB: 50,
+		Status: instance.StatusProvisioning,
+	}
+	insts := newFakeInstances(rec, orphaned)
+	nodes := &fakeNodes{rec: rec}
+	sched := &fakeScheduler{rec: rec, node: node.Node{ID: "node-1"}}
+	saga := newTestSaga(rec, insts, nodes, sched, "", nil)
+
+	if err := saga.Provision(context.Background(), "tenant-1", "inst-1"); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	if insts.status("inst-1") != instance.StatusRunning {
+		t.Errorf("final status = %q, want RUNNING", insts.status("inst-1"))
+	}
+	assertTrace(t, rec, []string{
+		"transition:ERROR",
+		"transition:PROVISIONING", "schedule", "reserve:node-1", "set_node_id:node-1",
+		"create_disk", "create_network", "set_ip_address:10.20.0.99", "create_vm", "start_vm", "transition:RUNNING",
+	})
+}
+
 func TestSagaFailsAtSchedule(t *testing.T) {
 	rec := &callRecorder{}
 	insts := newFakeInstances(rec, newPendingInstance())
