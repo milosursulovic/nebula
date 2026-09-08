@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -46,12 +44,15 @@ func run(logger *slog.Logger) error {
 		registrar.RunHeartbeatLoop(ctx)
 	}()
 
-	srv := agent.NewServer(":"+cfg.Port, store)
+	grpcServer, lis, err := agent.NewServer(":"+cfg.Port, cfg.TLSCertFile, cfg.TLSKeyFile, store)
+	if err != nil {
+		return err
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("nebula-agent listening", "addr", srv.Addr, "node_id", registrar.NodeID())
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Info("nebula-agent listening", "addr", lis.Addr().String(), "node_id", registrar.NodeID())
+		if err := grpcServer.Serve(lis); err != nil {
 			errCh <- err
 		}
 	}()
@@ -63,11 +64,16 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	stopped := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(stopped)
+	}()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return err
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		grpcServer.Stop()
 	}
 
 	wg.Wait()

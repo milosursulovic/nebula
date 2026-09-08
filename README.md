@@ -89,10 +89,10 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   create VM → start VM → transition to `RUNNING`. Disk/network steps are
   local mocks (simulated work, always succeed) — real implementations are
   Phase 12 (Networking) and Phase 13 (Storage)'s job. Resource reservation
-  is real, and VM steps are real HTTP calls to the target node's
-  `nebula-agent` (see below) — the agent's own VM backend is still mocked
-  (Phase 11/KVM's job), but a real network hop happens now, not an
-  in-process function call.
+  is real, and VM steps are real gRPC calls (TLS-secured) to the target
+  node's `nebula-agent` (see below) — the agent's own VM backend is still
+  mocked (Phase 11/KVM's job), but a real, authenticated network hop
+  happens now, not an in-process function call.
 - Any step's failure compensates in reverse order — exactly the spec's
   worked example: create VM fails → delete network → delete disk →
   release reservation — then transitions the instance to `ERROR`. A job
@@ -100,23 +100,34 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   onto a different node) rather than assuming the prior choice still
   holds.
 
-**Nebula Agent** (`cmd/nebula-agent`, `internal/agent/`)
+**Nebula Agent** (`cmd/nebula-agent`, `internal/agent/`, `internal/agentpb/`)
 - A separate binary that runs on each compute node (spec section 27) — the
   abstraction layer between the control plane and the machine, so
   `nebula-api` never executes anything directly on a node.
-- On startup: registers itself with `nebula-api` (retried with backoff —
-  fails fast, no retries, on a permanent `409` like an already-registered
-  hostname) and starts a heartbeat loop, posting real host metrics (CPU%
-  from `/proc/stat` deltas, memory from `/proc/meminfo`, disk from
-  `statfs`, load average from `/proc/loadavg`) every
-  `NEBULA_AGENT_HEARTBEAT_INTERVAL` (default `5s`).
-- Runs its own small, unauthenticated REST server (`NEBULA_AGENT_PORT`,
-  default `7071` — no TLS/mTLS yet, that's Phase 10): `GET /info`
-  (current metrics), `POST /vms`, `GET /vms/{instanceID}`,
-  `POST /vms/{instanceID}/start`, `DELETE /vms/{instanceID}` — this is
-  the REST shape of spec section 28's eventual protobuf `NebulaAgent`
-  service. VM state is in-memory only (`internal/agent/store.go`); Phase
-  11 replaces it with libvirt.
+- On startup: registers itself with `nebula-api` over REST (retried with
+  backoff — fails fast, no retries, on a permanent `409` like an
+  already-registered hostname) and starts a heartbeat loop, posting real
+  host metrics (CPU% from `/proc/stat` deltas, memory from
+  `/proc/meminfo`, disk from `statfs`, load average from `/proc/loadavg`)
+  every `NEBULA_AGENT_HEARTBEAT_INTERVAL` (default `5s`). This direction
+  (agent → control plane) is unchanged since Phase 9.
+- Runs a TLS-secured gRPC server (`NEBULA_AGENT_PORT`, default `7071`) —
+  `internal/agentpb/` is generated (via `buf generate`, see `proto/
+  nebula_agent.proto`) from spec section 28's `NebulaAgent` service:
+  `GetNodeInfo`, `CreateVM`, `DeleteVM`, `StartVM`, `StopVM`,
+  `GetVMStatus`. This is the control-plane → agent direction; Phase 9's
+  REST version of this same surface is fully replaced, not kept
+  alongside. Server reflection is enabled (`grpcurl` works without the
+  `.proto` file). TLS is server-authenticated only — the agent presents a
+  cert, `nebula-api` verifies it against a pinned dev cert
+  (`NEBULA_AGENT_TLS_CA_FILE`); mTLS (the agent verifying *its* caller)
+  is explicitly deferred (spec: "Later implement mTLS"). VM state is
+  in-memory only (`internal/agent/store.go`); Phase 11 replaces it with
+  libvirt.
+- The dev TLS cert (`deployments/certs/`) is a static, checked-in
+  self-signed cert+key — same "dev-only, change-me" precedent as the
+  plaintext `JWT_SECRET`/`NEBULA_NODE_BOOTSTRAP_SECRET` values already in
+  `docker-compose.yml`. See `deployments/certs/README.md`.
 - Registration is not idempotent across restarts — a restarted agent with
   the same hostname gets rejected and exits; recovering it today needs a
   hostname change or removing the stale `compute_nodes` row by hand
@@ -188,6 +199,17 @@ cp configs/.env.example .env   # edit as needed
 export $(cat .env | xargs)
 make migrate-up
 make run
+```
+
+Regenerating `internal/agentpb/` after editing `proto/nebula_agent.proto`
+requires [`buf`](https://buf.build) plus the Go protoc plugins (all
+`go install`-able, no `protoc`/`sudo` needed):
+
+```
+go install github.com/bufbuild/buf/cmd/buf@latest
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+make proto-gen
 ```
 
 ## Testing

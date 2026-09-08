@@ -52,6 +52,20 @@ func (s *Store) Start(instanceID string) (VM, error) {
 	return vm, nil
 }
 
+// Stop transitions a VM to STOPPED.
+func (s *Store) Stop(instanceID string) (VM, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	vm, ok := s.vms[instanceID]
+	if !ok {
+		return VM{}, ErrVMNotFound
+	}
+	vm.Status = VMStatusStopped
+	s.vms[instanceID] = vm
+	return vm, nil
+}
+
 // Delete removes a VM record. Deleting an unknown instanceID is a no-op
 // success (compensation may call this after a step that never created
 // anything).

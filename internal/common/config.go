@@ -17,6 +17,7 @@ type Config struct {
 	SchedulerStrategy   string
 	AgentPort           string
 	NodeBootstrapSecret string
+	AgentTLSCAFile      string
 }
 
 // Load reads configuration from the environment and validates it.
@@ -36,6 +37,7 @@ func Load() (Config, error) {
 		SchedulerStrategy:   getEnv("NEBULA_SCHEDULER_STRATEGY", "weighted"),
 		AgentPort:           getEnv("NEBULA_AGENT_PORT", "7071"),
 		NodeBootstrapSecret: os.Getenv("NEBULA_NODE_BOOTSTRAP_SECRET"),
+		AgentTLSCAFile:      os.Getenv("NEBULA_AGENT_TLS_CA_FILE"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -46,6 +48,9 @@ func Load() (Config, error) {
 	}
 	if cfg.NodeBootstrapSecret == "" {
 		return Config{}, fmt.Errorf("NEBULA_NODE_BOOTSTRAP_SECRET is required")
+	}
+	if cfg.AgentTLSCAFile == "" {
+		return Config{}, fmt.Errorf("NEBULA_AGENT_TLS_CA_FILE is required")
 	}
 
 	return cfg, nil

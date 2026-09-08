@@ -73,7 +73,10 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	mockSteps := provisioning.NewMockSteps(logger)
-	agentSteps := provisioning.NewAgentSteps(nodeSvc, cfg.AgentPort, logger)
+	agentSteps, err := provisioning.NewAgentSteps(nodeSvc, cfg.AgentPort, cfg.AgentTLSCAFile, logger)
+	if err != nil {
+		return err
+	}
 	saga := provisioning.NewSagaWithSteps(instanceSvc, nodeSvc, schedulerSvc, logger, provisioning.Steps{
 		CreateDisk: mockSteps.CreateDisk, DeleteDisk: mockSteps.DeleteDisk,
 		CreateNetwork: mockSteps.CreateNetwork, DeleteNetwork: mockSteps.DeleteNetwork,

@@ -7,5 +7,6 @@ RUN CGO_ENABLED=0 go build -o /out/nebula-agent ./cmd/nebula-agent
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /out/nebula-agent /usr/local/bin/nebula-agent
+COPY deployments/certs/nebula-agent.crt deployments/certs/nebula-agent.key /etc/nebula/tls/
 EXPOSE 7071
 ENTRYPOINT ["/usr/local/bin/nebula-agent"]

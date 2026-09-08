@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package nebula.agent.v1;
+
+option go_package = "github.com/milosursulovic/nebula/internal/agentpb";
+
+// NebulaAgent is the control-plane -> agent protocol (spec section 28) —
+// gRPC replaces the Phase 9 REST version of this same surface.
+service NebulaAgent {
+  rpc GetNodeInfo(GetNodeInfoRequest) returns (GetNodeInfoResponse);
+  rpc CreateVM(CreateVMRequest) returns (CreateVMResponse);
+  rpc DeleteVM(DeleteVMRequest) returns (DeleteVMResponse);
+  rpc StartVM(StartVMRequest) returns (StartVMResponse);
+  rpc StopVM(StopVMRequest) returns (StopVMResponse);
+  rpc GetVMStatus(GetVMStatusRequest) returns (GetVMStatusResponse);
+}
+
+message GetNodeInfoRequest {}
+
+message GetNodeInfoResponse {
+  double cpu_usage = 1;
+  int64 memory_used_mb = 2;
+  int64 disk_used_gb = 3;
+  double load_average = 4;
+  int32 running_instances = 5;
+}
+
+message CreateVMRequest {
+  string instance_id = 1;
+  int32 cpu = 2;
+  int32 memory_mb = 3;
+  int32 disk_gb = 4;
+  string image = 5;
+}
+
+message CreateVMResponse {
+  string instance_id = 1;
+  string status = 2;
+}
+
+message DeleteVMRequest {
+  string instance_id = 1;
+}
+
+message DeleteVMResponse {}
+
+message StartVMRequest {
+  string instance_id = 1;
+}
+
+message StartVMResponse {
+  string instance_id = 1;
+  string status = 2;
+}
+
+message StopVMRequest {
+  string instance_id = 1;
+}
+
+message StopVMResponse {
+  string instance_id = 1;
+  string status = 2;
+}
+
+message GetVMStatusRequest {
+  string instance_id = 1;
+}
+
+message GetVMStatusResponse {
+  string instance_id = 1;
+  string status = 2;
+  int32 cpu = 3;
+  int32 memory_mb = 4;
+  int32 disk_gb = 5;
+  string image = 6;
+}

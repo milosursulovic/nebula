@@ -1,153 +1,112 @@
 package agent
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
-	"net/http"
-	"time"
+	"net"
 
-	"github.com/go-chi/chi/v5"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
+
+	"github.com/milosursulovic/nebula/internal/agentpb"
 )
 
-// NewServer builds nebula-agent's own HTTP server — the REST shape of
-// section 28's eventual protobuf NebulaAgent service (GetNodeInfo,
-// CreateVM, DeleteVM, StartVM; no auth/TLS yet, that's Phase 10).
-func NewServer(addr string, store *Store) *http.Server {
-	r := chi.NewRouter()
+// grpcServer implements agentpb.NebulaAgentServer over the same Store the
+// Phase 9 REST server used — this is a transport swap (spec section 64:
+// "move control plane -> agent communication to gRPC"), not a redesign.
+type grpcServer struct {
+	agentpb.UnimplementedNebulaAgentServer
+	store *Store
+}
 
-	r.Get("/info", handleInfo(store))
-	r.Post("/vms", handleCreateVM(store))
-	r.Get("/vms/{instanceID}", handleGetVM(store))
-	r.Post("/vms/{instanceID}/start", handleStartVM(store))
-	r.Delete("/vms/{instanceID}", handleDeleteVM(store))
-
-	return &http.Server{
-		Addr:              addr,
-		Handler:           r,
-		ReadHeaderTimeout: 5 * time.Second,
+// NewServer builds nebula-agent's TLS-enabled gRPC server, listening on
+// addr. certFile/keyFile are the agent's own server certificate (spec
+// section 64: "Implement TLS" — server-authenticated only; mTLS, client
+// cert verification, is explicitly "later"). Server reflection is
+// registered so grpcurl can introspect the service without needing the
+// .proto file on hand.
+func NewServer(addr, certFile, keyFile string, store *Store) (*grpc.Server, net.Listener, error) {
+	creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
+	if err != nil {
+		return nil, nil, err
 	}
-}
 
-type infoResponse struct {
-	CPUUsage         float64 `json:"cpu_usage"`
-	MemoryUsedMB     int     `json:"memory_used_mb"`
-	DiskUsedGB       int     `json:"disk_used_gb"`
-	LoadAverage      float64 `json:"load_average"`
-	RunningInstances int     `json:"running_instances"`
-}
-
-// handleInfo is GetNodeInfo's REST shape — the same metrics posted on
-// heartbeats, readable directly for debugging/verification.
-func handleInfo(store *Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		m, err := collectMetrics(r.Context())
-		if err != nil {
-			writeAgentError(w, http.StatusInternalServerError, "failed to collect metrics")
-			return
-		}
-		writeJSON(w, http.StatusOK, infoResponse{
-			CPUUsage:         m.CPUUsage,
-			MemoryUsedMB:     m.MemUsedMB,
-			DiskUsedGB:       m.DiskUsedGB,
-			LoadAverage:      m.LoadAverage,
-			RunningInstances: store.Count(),
-		})
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, nil, err
 	}
+
+	srv := grpc.NewServer(grpc.Creds(creds))
+	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{store: store})
+	reflection.Register(srv)
+
+	return srv, lis, nil
 }
 
-type createVMRequest struct {
-	InstanceID string `json:"instance_id"`
-	CPU        int    `json:"cpu"`
-	MemoryMB   int    `json:"memory_mb"`
-	DiskGB     int    `json:"disk_gb"`
-	Image      string `json:"image"`
+func (g *grpcServer) GetNodeInfo(ctx context.Context, _ *agentpb.GetNodeInfoRequest) (*agentpb.GetNodeInfoResponse, error) {
+	m, err := collectMetrics(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to collect metrics")
+	}
+	return &agentpb.GetNodeInfoResponse{
+		CpuUsage:         m.CPUUsage,
+		MemoryUsedMb:     int64(m.MemUsedMB),
+		DiskUsedGb:       int64(m.DiskUsedGB),
+		LoadAverage:      m.LoadAverage,
+		RunningInstances: int32(g.store.Count()),
+	}, nil
 }
 
-type vmResponse struct {
-	InstanceID string `json:"instance_id"`
-	Status     string `json:"status"`
-	CPU        int    `json:"cpu"`
-	MemoryMB   int    `json:"memory_mb"`
-	DiskGB     int    `json:"disk_gb"`
-	Image      string `json:"image"`
+func (g *grpcServer) CreateVM(ctx context.Context, req *agentpb.CreateVMRequest) (*agentpb.CreateVMResponse, error) {
+	if req.GetInstanceId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "instance_id is required")
+	}
+	vm := g.store.Create(req.GetInstanceId(), int(req.GetCpu()), int(req.GetMemoryMb()), int(req.GetDiskGb()), req.GetImage())
+	return &agentpb.CreateVMResponse{InstanceId: vm.InstanceID, Status: string(vm.Status)}, nil
 }
 
-func newVMResponse(vm VM) vmResponse {
-	return vmResponse{
-		InstanceID: vm.InstanceID,
+func (g *grpcServer) DeleteVM(ctx context.Context, req *agentpb.DeleteVMRequest) (*agentpb.DeleteVMResponse, error) {
+	g.store.Delete(req.GetInstanceId())
+	return &agentpb.DeleteVMResponse{}, nil
+}
+
+func (g *grpcServer) StartVM(ctx context.Context, req *agentpb.StartVMRequest) (*agentpb.StartVMResponse, error) {
+	vm, err := g.store.Start(req.GetInstanceId())
+	if err != nil {
+		return nil, vmError(err)
+	}
+	return &agentpb.StartVMResponse{InstanceId: vm.InstanceID, Status: string(vm.Status)}, nil
+}
+
+func (g *grpcServer) StopVM(ctx context.Context, req *agentpb.StopVMRequest) (*agentpb.StopVMResponse, error) {
+	vm, err := g.store.Stop(req.GetInstanceId())
+	if err != nil {
+		return nil, vmError(err)
+	}
+	return &agentpb.StopVMResponse{InstanceId: vm.InstanceID, Status: string(vm.Status)}, nil
+}
+
+func (g *grpcServer) GetVMStatus(ctx context.Context, req *agentpb.GetVMStatusRequest) (*agentpb.GetVMStatusResponse, error) {
+	vm, err := g.store.Get(req.GetInstanceId())
+	if err != nil {
+		return nil, vmError(err)
+	}
+	return &agentpb.GetVMStatusResponse{
+		InstanceId: vm.InstanceID,
 		Status:     string(vm.Status),
-		CPU:        vm.CPU,
-		MemoryMB:   vm.MemoryMB,
-		DiskGB:     vm.DiskGB,
+		Cpu:        int32(vm.CPU),
+		MemoryMb:   int32(vm.MemoryMB),
+		DiskGb:     int32(vm.DiskGB),
 		Image:      vm.Image,
+	}, nil
+}
+
+func vmError(err error) error {
+	if errors.Is(err, ErrVMNotFound) {
+		return status.Error(codes.NotFound, "no vm for this instance id")
 	}
-}
-
-func handleCreateVM(store *Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req createVMRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeAgentError(w, http.StatusBadRequest, "request body must be valid JSON")
-			return
-		}
-		if req.InstanceID == "" {
-			writeAgentError(w, http.StatusBadRequest, "instance_id is required")
-			return
-		}
-
-		vm := store.Create(req.InstanceID, req.CPU, req.MemoryMB, req.DiskGB, req.Image)
-		writeJSON(w, http.StatusCreated, newVMResponse(vm))
-	}
-}
-
-func handleGetVM(store *Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		instanceID := chi.URLParam(r, "instanceID")
-
-		vm, err := store.Get(instanceID)
-		if err != nil {
-			if errors.Is(err, ErrVMNotFound) {
-				writeAgentError(w, http.StatusNotFound, "no vm for this instance id")
-				return
-			}
-			writeAgentError(w, http.StatusInternalServerError, "failed to get vm")
-			return
-		}
-		writeJSON(w, http.StatusOK, newVMResponse(vm))
-	}
-}
-
-func handleStartVM(store *Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		instanceID := chi.URLParam(r, "instanceID")
-
-		vm, err := store.Start(instanceID)
-		if err != nil {
-			if errors.Is(err, ErrVMNotFound) {
-				writeAgentError(w, http.StatusNotFound, "no vm for this instance id")
-				return
-			}
-			writeAgentError(w, http.StatusInternalServerError, "failed to start vm")
-			return
-		}
-		writeJSON(w, http.StatusOK, newVMResponse(vm))
-	}
-}
-
-func handleDeleteVM(store *Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		instanceID := chi.URLParam(r, "instanceID")
-		store.Delete(instanceID)
-		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-func writeAgentError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+	return status.Error(codes.Internal, err.Error())
 }

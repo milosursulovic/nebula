@@ -20,6 +20,8 @@ type Config struct {
 	Port              string
 	HeartbeatInterval time.Duration
 	BootstrapSecret   string
+	TLSCertFile       string
+	TLSKeyFile        string
 }
 
 // Load reads configuration from the environment and validates it, failing
@@ -39,6 +41,15 @@ func Load() (Config, error) {
 	bootstrapSecret := os.Getenv("NEBULA_NODE_BOOTSTRAP_SECRET")
 	if bootstrapSecret == "" {
 		return Config{}, fmt.Errorf("NEBULA_NODE_BOOTSTRAP_SECRET is required")
+	}
+
+	tlsCertFile := os.Getenv("NEBULA_AGENT_TLS_CERT_FILE")
+	if tlsCertFile == "" {
+		return Config{}, fmt.Errorf("NEBULA_AGENT_TLS_CERT_FILE is required")
+	}
+	tlsKeyFile := os.Getenv("NEBULA_AGENT_TLS_KEY_FILE")
+	if tlsKeyFile == "" {
+		return Config{}, fmt.Errorf("NEBULA_AGENT_TLS_KEY_FILE is required")
 	}
 
 	hostname := os.Getenv("NEBULA_AGENT_HOSTNAME")
@@ -78,6 +89,8 @@ func Load() (Config, error) {
 		Port:              getEnv("NEBULA_AGENT_PORT", "7071"),
 		HeartbeatInterval: interval,
 		BootstrapSecret:   bootstrapSecret,
+		TLSCertFile:       tlsCertFile,
+		TLSKeyFile:        tlsKeyFile,
 	}, nil
 }
 
