@@ -38,7 +38,17 @@ func eligibleNodes(ctx context.Context, nodes NodeLister, req ResourceRequest) (
 		return nil, err
 	}
 
-	var eligible []node.Node
+	// Pre-sized to the worst case (every node qualifies) — a nil slice
+	// grown via append alone forces several reallocate-and-copy cycles as
+	// it doubles, each copying increasingly many (fairly large) node.Node
+	// values. Phase 17's benchmarking/profiling found this function
+	// accounting for 100% of the scheduler benchmark's allocations and a
+	// third of its CPU time (mostly downstream GC pressure from those
+	// allocations, not eligibleNodes' own filtering logic) — this is the
+	// concrete, safe fix that came out of it, same pre-sizing idiom
+	// already used elsewhere in this codebase (e.g. pkg/api's list
+	// handlers' `make([]xResponse, 0, len(items))`).
+	eligible := make([]node.Node, 0, len(all))
 	for _, n := range all {
 		if n.Status != node.StatusOnline {
 			continue

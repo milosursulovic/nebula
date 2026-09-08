@@ -120,9 +120,20 @@ func run(logger *slog.Logger) error {
 	}()
 
 	kafkaWriter := &kafka.Writer{
-		Addr:        kafka.TCP(cfg.KafkaBrokers...),
-		Balancer:    &kafka.LeastBytes{},
-		ErrorLogger: kafkaErrorLogger(logger),
+		Addr:     kafka.TCP(cfg.KafkaBrokers...),
+		Balancer: &kafka.LeastBytes{},
+		// kafka.Writer's own BatchTimeout defaults to 1s (batches up
+		// writes arriving within that window into one request) — but
+		// outbox.Publisher already does its own batching one level up
+		// (ticks once a second, gathers up to PublisherBatchSize events,
+		// then calls WriteMessages once per event in that batch), so this
+		// second, redundant 1s timer only adds latency: a Publish call
+		// with nothing else queued right behind it just waits out the
+		// full second for no reason. Phase 17's benchmarking measured
+		// this directly (~1s/op with the default, unbatched calls)
+		// before setting this.
+		BatchTimeout: 10 * time.Millisecond,
+		ErrorLogger:  kafkaErrorLogger(logger),
 	}
 	defer kafkaWriter.Close()
 

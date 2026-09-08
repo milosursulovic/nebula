@@ -340,6 +340,24 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   other config surface, no TLS concern here (that's the control-plane→
   agent hop, unchanged).
 
+**Benchmarking** (`*_bench_test.go` alongside each package's other tests)
+- `go test -bench=. -benchmem ./...` covers the six targets spec section
+  47 names: scheduler (all four strategies against 1000 synthetic
+  nodes), API (HTTP round trip via `httptest`, no DB), resource
+  reservation and IPAM (real Postgres — `NEBULA_DATABASE_URL`), workers
+  (the job-claim row lock, same gate), and Kafka producer/consumer
+  throughput (real broker — `NEBULA_KAFKA_BROKERS`). Every gated
+  benchmark `b.Skip`s cleanly when its env var is unset, same convention
+  as the mandatory concurrency tests.
+- See `docs/benchmarks.md` for real numbers from a run against this
+  stack, methodology, and two concrete fixes that run's profiling
+  (`pprof`) found and justified: `internal/scheduler`'s `eligibleNodes`
+  was allocating a node slice via unsized `append` (pre-sizing it cut
+  allocations 11→1/call across all four strategies), and the outbox
+  publisher's Kafka writer was paying `kafka.Writer`'s default 1-second
+  `BatchTimeout` on every single-message publish (setting it explicitly
+  to 10ms cut publish latency by roughly 96x).
+
 **Persistence & infra**
 - PostgreSQL via pgx (`internal/common/postgres.go`), SQL migrations via
   `golang-migrate` (`migrations/`).
