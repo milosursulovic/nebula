@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="NEBULA logo" width="120" height="120">
+  <img src="docs/assets/logo.png" alt="NEBULA logo" width="120" height="120">
 </p>
 
 # NEBULA
