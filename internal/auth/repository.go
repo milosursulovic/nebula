@@ -21,6 +21,11 @@ type Repository interface {
 	FindUserByEmail(ctx context.Context, email string) (User, error)
 	FindMembershipByUserID(ctx context.Context, userID string) (TenantMembership, error)
 
+	// ListTenants is a platform-infrastructure query (spec section 8:
+	// "SUPER_ADMIN -> manage tenants") — every tenant, not scoped to any
+	// one of them, mirrors node.Repository.List.
+	ListTenants(ctx context.Context) ([]Tenant, error)
+
 	CreateRefreshToken(ctx context.Context, rt RefreshToken) error
 	FindRefreshTokenByHash(ctx context.Context, hash string) (RefreshToken, error)
 	RevokeRefreshToken(ctx context.Context, id string) error
@@ -107,6 +112,24 @@ func (r *pgxRepository) FindMembershipByUserID(ctx context.Context, userID strin
 		return TenantMembership{}, err
 	}
 	return m, nil
+}
+
+func (r *pgxRepository) ListTenants(ctx context.Context) ([]Tenant, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, name, created_at, updated_at FROM tenants ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tenants []Tenant
+	for rows.Next() {
+		var t Tenant
+		if err := rows.Scan(&t.ID, &t.Name, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		tenants = append(tenants, t)
+	}
+	return tenants, rows.Err()
 }
 
 func (r *pgxRepository) CreateRefreshToken(ctx context.Context, rt RefreshToken) error {

@@ -125,10 +125,16 @@ func (r *pgxRepository) FindByTokenHash(ctx context.Context, tokenHash string) (
 	return n, err
 }
 
+// UpdateHeartbeat records a live heartbeat and normally moves status to the
+// given value (StatusOnline, from Service.Heartbeat). It deliberately does
+// NOT clobber an operator-set DRAINING status: a still-heartbeating node's
+// own liveness signal shouldn't silently undo an explicit drain decision —
+// only a fresh call to UpdateStatus (Drain, or the monitor) changes it back.
 func (r *pgxRepository) UpdateHeartbeat(ctx context.Context, id string, loadAverage float64, runningInstances int, status Status) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE compute_nodes
-		SET load_average = $2, running_instances = $3, status = $4,
+		SET load_average = $2, running_instances = $3,
+		    status = CASE WHEN status = 'DRAINING' THEN status ELSE $4 END,
 		    last_heartbeat_at = now(), updated_at = now()
 		WHERE id = $1`,
 		id, loadAverage, runningInstances, status,

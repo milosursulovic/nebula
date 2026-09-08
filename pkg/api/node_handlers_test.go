@@ -12,7 +12,7 @@ import (
 
 func newNodeTestServer(nodeSvc node.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, testLogger(), testNodeBootstrapSecret), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func superAdminAuthHeader(t *testing.T, tokens auth.TokenIssuer) map[string]string {
@@ -184,6 +184,60 @@ func TestHandleGetNodeNotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestHandleDrainNodeSuccess(t *testing.T) {
+	svc := fakeNodeService{
+		drainFn: func(ctx context.Context, id string) (node.Node, error) {
+			if id != "node-1" {
+				t.Fatalf("unexpected id: %q", id)
+			}
+			return node.Node{ID: id, Hostname: "compute-01", Status: node.StatusDraining}, nil
+		},
+	}
+	srv, tokens := newNodeTestServer(svc)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/nodes/node-1/drain", nil, superAdminAuthHeader(t, tokens))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var got nodeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Status != string(node.StatusDraining) {
+		t.Fatalf("Status = %q, want %q", got.Status, node.StatusDraining)
+	}
+}
+
+func TestHandleDrainNodeNotFound(t *testing.T) {
+	svc := fakeNodeService{
+		drainFn: func(ctx context.Context, id string) (node.Node, error) {
+			return node.Node{}, node.ErrNotFound
+		},
+	}
+	srv, tokens := newNodeTestServer(svc)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/nodes/nonexistent/drain", nil, superAdminAuthHeader(t, tokens))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleDrainNodeForbiddenForNonSuperAdmin(t *testing.T) {
+	svc := fakeNodeService{
+		drainFn: func(ctx context.Context, id string) (node.Node, error) {
+			t.Fatal("Drain should not be called for a non-SUPER_ADMIN caller")
+			return node.Node{}, nil
+		},
+	}
+	srv, tokens := newNodeTestServer(svc)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/nodes/node-1/drain", nil, tenantAdminAuthHeader(t, tokens))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
 	}
 }
 

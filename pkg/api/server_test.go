@@ -38,8 +38,13 @@ func noopDeleteVM(ctx context.Context, instanceID, nodeID string) error { return
 // that don't care about IP release.
 func noopReleaseIP(ctx context.Context, instanceID string) error { return nil }
 
+// noopStartVM / noopStopVM are the default provisioning.VMStarter /
+// VMStopper fakes for tests that don't care about agent-side start/stop.
+func noopStartVM(ctx context.Context, instanceID, nodeID string) error { return nil }
+func noopStopVM(ctx context.Context, instanceID, nodeID string) error  { return nil }
+
 func TestHandleHealth(t *testing.T) {
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, testTokenIssuer(), fakeNodeService{}, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, testLogger(), testNodeBootstrapSecret)
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, testTokenIssuer(), fakeNodeService{}, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -62,7 +67,7 @@ func TestHandleReady(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := NewServer(":0", tt.pinger, fakeAuthService{}, testTokenIssuer(), fakeNodeService{}, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, testLogger(), testNodeBootstrapSecret)
+			srv := NewServer(":0", tt.pinger, fakeAuthService{}, testTokenIssuer(), fakeNodeService{}, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
 
 			req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 			rec := httptest.NewRecorder()

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 
 func newInstanceTestServer(instanceSvc instance.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, testLogger(), testNodeBootstrapSecret), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func userAuthHeader(t *testing.T, tokens auth.TokenIssuer, tenantID string) map[string]string {
@@ -135,6 +136,168 @@ func TestHandleGetInstanceNotFound(t *testing.T) {
 	}
 }
 
+func TestHandleStopInstanceSuccess(t *testing.T) {
+	nodeID := "node-1"
+	transitions := []instance.Status{}
+	instanceSvc := fakeInstanceService{
+		transitionFn: func(ctx context.Context, tenantID, id string, to instance.Status) (instance.Instance, error) {
+			transitions = append(transitions, to)
+			return instance.Instance{ID: id, Status: to, NodeID: &nodeID}, nil
+		},
+	}
+	vmStopped := false
+	stopVM := func(ctx context.Context, instanceID, nid string) error {
+		vmStopped = true
+		if instanceID != "inst-1" || nid != nodeID {
+			t.Fatalf("unexpected stopVM args: instanceID=%q nodeID=%q", instanceID, nid)
+		}
+		return nil
+	}
+
+	tokens := testTokenIssuer()
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, stopVM, testLogger(), testNodeBootstrapSecret)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/stop", nil, userAuthHeader(t, tokens, "tenant-1"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !vmStopped {
+		t.Error("expected stopVM to be called")
+	}
+	if len(transitions) != 2 || transitions[0] != instance.StatusStopping || transitions[1] != instance.StatusStopped {
+		t.Errorf("unexpected transition sequence: %v", transitions)
+	}
+}
+
+func TestHandleStopInstanceInvalidTransition(t *testing.T) {
+	svc := fakeInstanceService{
+		transitionFn: func(ctx context.Context, tenantID, id string, to instance.Status) (instance.Instance, error) {
+			return instance.Instance{}, instance.ErrInvalidTransition
+		},
+	}
+	srv, tokens := newInstanceTestServer(svc)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/stop", nil, userAuthHeader(t, tokens, "tenant-1"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
+func TestHandleStopInstanceAgentErrorMarksError(t *testing.T) {
+	nodeID := "node-1"
+	transitions := []instance.Status{}
+	instanceSvc := fakeInstanceService{
+		transitionFn: func(ctx context.Context, tenantID, id string, to instance.Status) (instance.Instance, error) {
+			transitions = append(transitions, to)
+			return instance.Instance{ID: id, Status: to, NodeID: &nodeID}, nil
+		},
+	}
+	stopVM := func(ctx context.Context, instanceID, nid string) error {
+		return errors.New("agent unreachable")
+	}
+
+	tokens := testTokenIssuer()
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, stopVM, testLogger(), testNodeBootstrapSecret)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/stop", nil, userAuthHeader(t, tokens, "tenant-1"))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+	if len(transitions) != 2 || transitions[0] != instance.StatusStopping || transitions[1] != instance.StatusError {
+		t.Errorf("unexpected transition sequence: %v", transitions)
+	}
+}
+
+func TestHandleStartInstanceSuccess(t *testing.T) {
+	nodeID := "node-1"
+	instanceSvc := fakeInstanceService{
+		getFn: func(ctx context.Context, tenantID, id string) (instance.Instance, error) {
+			return instance.Instance{ID: id, Status: instance.StatusStopped, NodeID: &nodeID}, nil
+		},
+		transitionFn: func(ctx context.Context, tenantID, id string, to instance.Status) (instance.Instance, error) {
+			if to != instance.StatusRunning {
+				t.Fatalf("unexpected transition target: %q", to)
+			}
+			return instance.Instance{ID: id, Status: to, NodeID: &nodeID}, nil
+		},
+	}
+	vmStarted := false
+	startVM := func(ctx context.Context, instanceID, nid string) error {
+		vmStarted = true
+		if instanceID != "inst-1" || nid != nodeID {
+			t.Fatalf("unexpected startVM args: instanceID=%q nodeID=%q", instanceID, nid)
+		}
+		return nil
+	}
+
+	tokens := testTokenIssuer()
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, startVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/start", nil, userAuthHeader(t, tokens, "tenant-1"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !vmStarted {
+		t.Error("expected startVM to be called")
+	}
+
+	var resp instanceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != string(instance.StatusRunning) {
+		t.Errorf("Status = %q, want %q", resp.Status, instance.StatusRunning)
+	}
+}
+
+func TestHandleStartInstanceRequiresStopped(t *testing.T) {
+	svc := fakeInstanceService{
+		getFn: func(ctx context.Context, tenantID, id string) (instance.Instance, error) {
+			return instance.Instance{ID: id, Status: instance.StatusRunning}, nil
+		},
+	}
+	srv, tokens := newInstanceTestServer(svc)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/start", nil, userAuthHeader(t, tokens, "tenant-1"))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
+func TestHandleStartInstanceAgentErrorLeavesStopped(t *testing.T) {
+	nodeID := "node-1"
+	transitionCalled := false
+	instanceSvc := fakeInstanceService{
+		getFn: func(ctx context.Context, tenantID, id string) (instance.Instance, error) {
+			return instance.Instance{ID: id, Status: instance.StatusStopped, NodeID: &nodeID}, nil
+		},
+		transitionFn: func(ctx context.Context, tenantID, id string, to instance.Status) (instance.Instance, error) {
+			transitionCalled = true
+			return instance.Instance{}, nil
+		},
+	}
+	startVM := func(ctx context.Context, instanceID, nid string) error {
+		return errors.New("agent unreachable")
+	}
+
+	tokens := testTokenIssuer()
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, startVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
+
+	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/start", nil, userAuthHeader(t, tokens, "tenant-1"))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+	if transitionCalled {
+		t.Error("Transition should not be called when the agent call fails — instance must stay STOPPED")
+	}
+}
+
 func TestHandleDeleteInstanceSuccess(t *testing.T) {
 	svc := fakeInstanceService{
 		deleteFn: func(ctx context.Context, tenantID, id string) (instance.Instance, error) {
@@ -210,7 +373,7 @@ func TestHandleDeleteInstanceReleasesNodeCapacity(t *testing.T) {
 	}
 
 	tokens := testTokenIssuer()
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, deleteVM, releaseIP, testLogger(), testNodeBootstrapSecret)
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, deleteVM, releaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
 
 	rec := doJSON(t, srv, http.MethodDelete, "/api/v1/instances/inst-1", nil, userAuthHeader(t, tokens, "tenant-1"))
 

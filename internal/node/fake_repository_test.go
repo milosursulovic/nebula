@@ -84,7 +84,9 @@ func (f *fakeRepository) UpdateHeartbeat(ctx context.Context, id string, loadAve
 	now := time.Now()
 	n.LoadAverage = loadAverage
 	n.RunningInstances = runningInstances
-	n.Status = status
+	if n.Status != StatusDraining {
+		n.Status = status
+	}
 	n.LastHeartbeatAt = &now
 	n.UpdatedAt = now
 	f.nodes[id] = n

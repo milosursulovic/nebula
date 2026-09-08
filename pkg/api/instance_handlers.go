@@ -138,6 +138,115 @@ func handleGetInstance(svc instance.Service) http.HandlerFunc {
 	}
 }
 
+// handleStopInstance drives RUNNING -> STOPPING -> STOPPED (spec section
+// 49's "nebula instance stop"). Synchronous, same precedent as
+// handleDeleteInstance: transition DB state, then call the agent directly
+// in the same request — no separate job type (job.TypeStopInstance stays
+// an unused schema placeholder, same as the network/disk job types Phases
+// 12/13 also left unused once wired directly).
+func handleStopInstance(svc instance.Service, stopVM provisioning.VMStopper, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFromContext(r.Context())
+		if !ok {
+			writeError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "no authenticated identity")
+			return
+		}
+
+		id := chi.URLParam(r, "id")
+
+		stopping, err := svc.Transition(r.Context(), identity.TenantID, id, instance.StatusStopping)
+		if err != nil {
+			if errors.Is(err, instance.ErrNotFound) {
+				writeError(w, r, http.StatusNotFound, "INSTANCE_NOT_FOUND", "no instance with this id")
+				return
+			}
+			if errors.Is(err, instance.ErrInvalidTransition) {
+				writeError(w, r, http.StatusConflict, "INVALID_TRANSITION", "instance must be RUNNING to stop")
+				return
+			}
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to stop instance")
+			return
+		}
+
+		if stopping.NodeID == nil {
+			logger.Error("instance in STOPPING has no node_id", "instance_id", id)
+			if _, err := svc.Transition(r.Context(), identity.TenantID, id, instance.StatusError); err != nil {
+				logger.Error("failed to transition instance to ERROR", "instance_id", id, "error", err)
+			}
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "instance has no assigned node")
+			return
+		}
+
+		if err := stopVM(r.Context(), id, *stopping.NodeID); err != nil {
+			logger.Error("failed to stop vm on agent", "instance_id", id, "node_id", *stopping.NodeID, "error", err)
+			if _, terr := svc.Transition(r.Context(), identity.TenantID, id, instance.StatusError); terr != nil {
+				logger.Error("failed to transition instance to ERROR", "instance_id", id, "error", terr)
+			}
+			writeError(w, r, http.StatusBadGateway, "AGENT_ERROR", "failed to stop vm on agent")
+			return
+		}
+
+		stopped, err := svc.Transition(r.Context(), identity.TenantID, id, instance.StatusStopped)
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to mark instance stopped")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, newInstanceResponse(stopped))
+	}
+}
+
+// handleStartInstance drives STOPPED -> RUNNING (spec section 49's "nebula
+// instance start"). The state machine has no STOPPED->ERROR transition, so
+// unlike stop this calls the agent BEFORE transitioning — a failure here
+// leaves the instance untouched (still STOPPED) rather than stuck
+// mid-transition with nowhere legal to go.
+func handleStartInstance(svc instance.Service, startVM provisioning.VMStarter, logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFromContext(r.Context())
+		if !ok {
+			writeError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "no authenticated identity")
+			return
+		}
+
+		id := chi.URLParam(r, "id")
+
+		current, err := svc.Get(r.Context(), identity.TenantID, id)
+		if err != nil {
+			if errors.Is(err, instance.ErrNotFound) {
+				writeError(w, r, http.StatusNotFound, "INSTANCE_NOT_FOUND", "no instance with this id")
+				return
+			}
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to get instance")
+			return
+		}
+
+		if current.Status != instance.StatusStopped {
+			writeError(w, r, http.StatusConflict, "INVALID_TRANSITION", "instance must be STOPPED to start")
+			return
+		}
+		if current.NodeID == nil {
+			logger.Error("instance in STOPPED has no node_id", "instance_id", id)
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "instance has no assigned node")
+			return
+		}
+
+		if err := startVM(r.Context(), id, *current.NodeID); err != nil {
+			logger.Error("failed to start vm on agent", "instance_id", id, "node_id", *current.NodeID, "error", err)
+			writeError(w, r, http.StatusBadGateway, "AGENT_ERROR", "failed to start vm on agent")
+			return
+		}
+
+		running, err := svc.Transition(r.Context(), identity.TenantID, id, instance.StatusRunning)
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to mark instance running")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, newInstanceResponse(running))
+	}
+}
+
 func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, storageSvc storage.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())

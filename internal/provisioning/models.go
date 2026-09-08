@@ -26,4 +26,5 @@ type (
 	VMCreator      func(ctx context.Context, instanceID, nodeID string, spec InstanceSpec) error
 	VMDeleter      func(ctx context.Context, instanceID, nodeID string) error
 	VMStarter      func(ctx context.Context, instanceID, nodeID string) error
+	VMStopper      func(ctx context.Context, instanceID, nodeID string) error
 )

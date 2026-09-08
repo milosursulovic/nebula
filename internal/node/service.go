@@ -38,6 +38,13 @@ type Service interface {
 	// Release increments a node's available capacity back (spec section
 	// 16: RESERVED -> AVAILABLE on failure), retrying on conflicts.
 	Release(ctx context.Context, id string, cpu, memoryMB, diskGB int) (Node, error)
+
+	// Drain marks a node DRAINING — an operator taking it out of
+	// scheduling rotation (the scheduler only ever considers ONLINE
+	// nodes, and the monitor already leaves DRAINING nodes alone; this
+	// is what actually sets the status the rest of the system already
+	// respects). Returns ErrNotFound if the node doesn't exist.
+	Drain(ctx context.Context, id string) (Node, error)
 }
 
 // maxReservationRetries bounds the optimistic-concurrency retry loop for
@@ -118,6 +125,16 @@ func (s *service) Heartbeat(ctx context.Context, id string, in HeartbeatInput) e
 		"running_instances", in.RunningInstances,
 	)
 	return nil
+}
+
+func (s *service) Drain(ctx context.Context, id string) (Node, error) {
+	if _, err := s.Get(ctx, id); err != nil {
+		return Node{}, err // may be ErrNotFound
+	}
+	if err := s.repo.UpdateStatus(ctx, id, StatusDraining); err != nil {
+		return Node{}, err
+	}
+	return s.Get(ctx, id)
 }
 
 func (s *service) Reserve(ctx context.Context, id string, cpu, memoryMB, diskGB int) (Node, error) {

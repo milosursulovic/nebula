@@ -15,6 +15,7 @@ type fakeNodeService struct {
 	authNodeFn  func(ctx context.Context, id, rawToken string) error
 	reserveFn   func(ctx context.Context, id string, cpu, memoryMB, diskGB int) (node.Node, error)
 	releaseFn   func(ctx context.Context, id string, cpu, memoryMB, diskGB int) (node.Node, error)
+	drainFn     func(ctx context.Context, id string) (node.Node, error)
 }
 
 func (f fakeNodeService) Register(ctx context.Context, in node.RegisterInput) (node.RegisterResult, error) {
@@ -43,4 +44,8 @@ func (f fakeNodeService) Reserve(ctx context.Context, id string, cpu, memoryMB, 
 
 func (f fakeNodeService) Release(ctx context.Context, id string, cpu, memoryMB, diskGB int) (node.Node, error) {
 	return f.releaseFn(ctx, id, cpu, memoryMB, diskGB)
+}
+
+func (f fakeNodeService) Drain(ctx context.Context, id string) (node.Node, error) {
+	return f.drainFn(ctx, id)
 }

@@ -78,6 +78,17 @@ func (f *fakeRepository) FindMembershipByUserID(ctx context.Context, userID stri
 	return m, nil
 }
 
+func (f *fakeRepository) ListTenants(ctx context.Context) ([]Tenant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	tenants := make([]Tenant, 0, len(f.tenants))
+	for _, t := range f.tenants {
+		tenants = append(tenants, t)
+	}
+	return tenants, nil
+}
+
 func (f *fakeRepository) CreateRefreshToken(ctx context.Context, rt RefreshToken) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

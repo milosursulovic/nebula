@@ -173,6 +173,29 @@ func handleGetNode(svc node.Service) http.HandlerFunc {
 	}
 }
 
+// handleDrainNode marks a node DRAINING — an operator taking it out of
+// scheduling rotation ahead of, say, maintenance (spec section 49's
+// "nebula node drain compute-01"). The scheduler already only considers
+// ONLINE nodes and the monitor already leaves DRAINING nodes alone; this is
+// what actually sets the status the rest of the system already respects.
+func handleDrainNode(svc node.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+
+		n, err := svc.Drain(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, node.ErrNotFound) {
+				writeError(w, r, http.StatusNotFound, "NODE_NOT_FOUND", "no node with this id")
+				return
+			}
+			writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to drain node")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, newNodeResponse(n))
+	}
+}
+
 type heartbeatRequest struct {
 	CPUUsage         float64 `json:"cpu_usage"`
 	MemoryUsedMB     int     `json:"memory_used_mb"`

@@ -111,6 +111,63 @@ func TestHeartbeatUpdatesNode(t *testing.T) {
 	}
 }
 
+func TestDrainMarksNodeDraining(t *testing.T) {
+	svc := newTestService()
+	ctx := context.Background()
+
+	result, err := svc.Register(ctx, RegisterInput{Hostname: "compute-01", IP: "10.0.0.11", CPU: 16, MemoryMB: 32768, DiskGB: 1000})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	drained, err := svc.Drain(ctx, result.Node.ID)
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if drained.Status != StatusDraining {
+		t.Errorf("Status = %q, want %q", drained.Status, StatusDraining)
+	}
+}
+
+func TestDrainNotFound(t *testing.T) {
+	svc := newTestService()
+
+	if _, err := svc.Drain(context.Background(), "does-not-exist"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Drain unknown node: err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestHeartbeatPreservesDraining is the regression test for the bug found
+// while implementing node drain (Phase 15): a DRAINING node's own agent
+// keeps heartbeating every few seconds, and Heartbeat must not silently flip
+// it back to ONLINE — that would make drain a no-op lie.
+func TestHeartbeatPreservesDraining(t *testing.T) {
+	svc := newTestService()
+	ctx := context.Background()
+
+	result, err := svc.Register(ctx, RegisterInput{Hostname: "compute-01", IP: "10.0.0.11", CPU: 16, MemoryMB: 32768, DiskGB: 1000})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err := svc.Drain(ctx, result.Node.ID); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+
+	if err := svc.Heartbeat(ctx, result.Node.ID, HeartbeatInput{
+		CPUUsage: 10, MemoryUsedMB: 1000, DiskUsedGB: 10, LoadAverage: 0.5, RunningInstances: 0,
+	}); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+
+	updated, err := svc.Get(ctx, result.Node.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if updated.Status != StatusDraining {
+		t.Errorf("Status after heartbeat = %q, want unchanged %q", updated.Status, StatusDraining)
+	}
+}
+
 func TestAuthenticateNodeToken(t *testing.T) {
 	svc := newTestService()
 	ctx := context.Background()

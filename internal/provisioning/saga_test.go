@@ -151,6 +151,9 @@ func (f *fakeNodes) Heartbeat(ctx context.Context, id string, in node.HeartbeatI
 func (f *fakeNodes) AuthenticateNodeToken(ctx context.Context, id, rawToken string) error {
 	panic("not used in saga tests")
 }
+func (f *fakeNodes) Drain(ctx context.Context, id string) (node.Node, error) {
+	panic("not used in saga tests")
+}
 
 // fakeScheduler backs Schedule.
 type fakeScheduler struct {

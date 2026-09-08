@@ -7,6 +7,7 @@ COMPOSE_FILE := deployments/compose/docker-compose.yml
 build:
 	go build -o bin/nebula-api ./cmd/nebula-api
 	go build -o bin/nebula-agent ./cmd/nebula-agent
+	go build -o bin/nebula ./cmd/nebula-cli
 
 proto-gen:
 	buf generate

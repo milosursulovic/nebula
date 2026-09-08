@@ -24,6 +24,8 @@ Nomad, and Proxmox. Full design spec: `docs/nebula.pdf`.
 - `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh` (rotates the
   refresh token), `POST /api/v1/auth/logout` (revokes it).
 - `GET /api/v1/me` — authenticated identity.
+- `GET /api/v1/tenants` — every tenant, `RequireRole(SUPER_ADMIN)` (spec
+  section 8: "SUPER_ADMIN -> manage tenants"), same gate as nodes/jobs.
 
 ```
 curl -X POST localhost:8080/api/v1/auth/register \
@@ -51,6 +53,14 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   (not a user JWT, since the agent runs unattended).
 - A background **node monitor** checks every 5s and demotes a node to
   `DEGRADED` (10-30s since last heartbeat) or `OFFLINE` (30s+).
+- `POST /api/v1/nodes/{id}/drain` (`SUPER_ADMIN`) — marks a node
+  `DRAINING`, taking it out of scheduling rotation ahead of maintenance;
+  the scheduler already only considers `ONLINE` nodes and the monitor
+  already leaves `DRAINING` nodes alone, so this is what actually sets the
+  status the rest of the system already respects. A drained node's own
+  agent keeps heartbeating, though — heartbeat handling deliberately does
+  *not* clobber an existing `DRAINING` status back to `ONLINE`, or drain
+  would silently undo itself on the node's next heartbeat (default 5s).
 
 **Instances** (`internal/instance/`)
 - Instances are tenant-scoped (unlike nodes) — every query is scoped to the
@@ -68,6 +78,15 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   STOPPED`, plus `ERROR`/`DELETING`/`DELETED`) rejects invalid transitions;
   `ERROR → PROVISIONING` lets a job retry re-enter the saga; delete is a
   soft two-hop `→ DELETING → DELETED`.
+- `POST /api/v1/instances/{id}/stop`, `POST /api/v1/instances/{id}/start`
+  — synchronous (same precedent as delete: transition DB state, then call
+  the agent gRPC directly in the same request, not a queued job). Stop:
+  `RUNNING → STOPPING`, call `StopVM`, then `→ STOPPED` on success or
+  `→ ERROR` on agent failure (both legal transitions). Start: call
+  `StartVM` *first* while still `STOPPED`, only transitioning
+  `STOPPED → RUNNING` if that succeeds — the state machine has no
+  `STOPPED → ERROR` path, so a failed start leaves the instance untouched
+  rather than stuck.
 - Cross-tenant access returns `404`, not `403` (no existence leak).
 
 **Scheduler & resource reservation** (`internal/scheduler/`, `internal/node/`)
@@ -278,6 +297,27 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 - Grafana dashboards (`deployments/grafana/`), provisioned (not clicked
   together by hand) via datasource + dashboard-provider YAML: API, nodes,
   instances, scheduler, jobs, Kafka, workers.
+
+**CLI** (`cmd/nebula-cli`, binary name `nebula`)
+- A thin client over `nebula-api`'s HTTP surface — no direct DB/Kafka/gRPC
+  access, same boundary any external caller would have. Built by `make
+  build` into `bin/nebula` alongside the other two binaries.
+- `nebula login <email> <password>` persists an access/refresh token pair
+  to `~/.nebula/credentials.json` (mode `0600`). Every other command loads
+  it, sends `Authorization: Bearer <access_token>`, and on a `401`
+  (access tokens live 15 minutes) transparently refreshes once via the
+  stored refresh token, persists the new pair, and retries — a CLI
+  session outlives one access token without a re-`login`.
+- Commands (spec section 49's exact list): `tenant list`; `node
+  list`/`get`/`drain`; `instance create --name --cpu --memory --disk
+  --image`/`list`/`get`/`start`/`stop`/`delete`; `network
+  list`/`create <name> --cidr --gateway`; `job list [--status]`/`retry`.
+  `list`/`get` output as tables/key-value pairs (stdlib `text/tabwriter`,
+  no new dependency); API errors print as `CODE: message` with a non-zero
+  exit rather than a raw status code or a stack trace.
+- Base URL from `NEBULA_API_URL` (default `http://localhost:8080`) — no
+  other config surface, no TLS concern here (that's the control-plane→
+  agent hop, unchanged).
 
 **Persistence & infra**
 - PostgreSQL via pgx (`internal/common/postgres.go`), SQL migrations via

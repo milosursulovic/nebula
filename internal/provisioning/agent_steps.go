@@ -121,6 +121,25 @@ func (a *AgentSteps) StartVM(ctx context.Context, instanceID, nodeID string) err
 	return nil
 }
 
+// StopVM is the CLI-driven (spec section 49's "nebula instance stop")
+// counterpart to StartVM — same dial/call/log shape, different RPC.
+func (a *AgentSteps) StopVM(ctx context.Context, instanceID, nodeID string) error {
+	client, closeConn, err := a.dial(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	defer closeConn()
+
+	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	if _, err := client.StopVM(callCtx, &agentpb.StopVMRequest{InstanceId: instanceID}); err != nil {
+		return fmt.Errorf("agent stop vm: %w", err)
+	}
+	a.logger.Info("provisioning: VM stopped via agent", "instance_id", instanceID, "node_id", nodeID)
+	return nil
+}
+
 // CreateDiskFile, DeleteDiskFile, and ResizeDiskFile satisfy
 // internal/storage.AgentDiskClient structurally (that interface is
 // package-local to internal/storage — no import needed here, same

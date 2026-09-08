@@ -22,7 +22,7 @@ import (
 )
 
 // NewServer builds the nebula-api HTTP server: router, middleware, and routes.
-func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, networkSvc network.Service, storageSvc storage.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
+func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, networkSvc network.Service, storageSvc storage.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, startVM provisioning.VMStarter, stopVM provisioning.VMStopper, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -61,7 +61,15 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 
 				r.Get("/", handleListNodes(nodeSvc))
 				r.Get("/{id}", handleGetNode(nodeSvc))
+				r.Post("/{id}/drain", handleDrainNode(nodeSvc))
 			})
+		})
+
+		r.Route("/tenants", func(r chi.Router) {
+			r.Use(auth.Authenticate(tokens))
+			r.Use(auth.RequireRole(auth.RoleSuperAdmin))
+
+			r.Get("/", handleListTenants(authSvc))
 		})
 
 		r.Route("/instances", func(r chi.Router) {
@@ -71,6 +79,8 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 			r.Get("/", handleListInstances(instanceSvc))
 			r.Get("/{id}", handleGetInstance(instanceSvc))
 			r.Delete("/{id}", handleDeleteInstance(instanceSvc, nodeSvc, storageSvc, deleteVM, releaseIP, logger))
+			r.Post("/{id}/start", handleStartInstance(instanceSvc, startVM, logger))
+			r.Post("/{id}/stop", handleStopInstance(instanceSvc, stopVM, logger))
 
 			r.Post("/{id}/disks", handleCreateDisk(instanceSvc, storageSvc))
 			r.Get("/{id}/disks", handleListInstanceDisks(instanceSvc, storageSvc))

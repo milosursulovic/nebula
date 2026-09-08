@@ -113,6 +113,26 @@ func TestRefreshWithUnknownToken(t *testing.T) {
 	}
 }
 
+func TestListTenants(t *testing.T) {
+	svc := newTestService()
+	ctx := context.Background()
+
+	if _, err := svc.Register(ctx, "a@example.com", "hunter2hunter2", "co-a"); err != nil {
+		t.Fatalf("Register a: %v", err)
+	}
+	if _, err := svc.Register(ctx, "b@example.com", "hunter2hunter2", "co-b"); err != nil {
+		t.Fatalf("Register b: %v", err)
+	}
+
+	tenants, err := svc.ListTenants(ctx)
+	if err != nil {
+		t.Fatalf("ListTenants: %v", err)
+	}
+	if len(tenants) != 2 {
+		t.Fatalf("len(tenants) = %d, want 2", len(tenants))
+	}
+}
+
 func TestLogoutRevokesToken(t *testing.T) {
 	svc := newTestService()
 	ctx := context.Background()

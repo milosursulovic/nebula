@@ -159,7 +159,7 @@ func run(logger *slog.Logger) error {
 		auditConsumer.Run(ctx)
 	}()
 
-	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, networkSvc, storageSvc, agentSteps.DeleteVM, networkSteps.DeleteNetwork, logger, cfg.NodeBootstrapSecret)
+	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, networkSvc, storageSvc, agentSteps.DeleteVM, networkSteps.DeleteNetwork, agentSteps.StartVM, agentSteps.StopVM, logger, cfg.NodeBootstrapSecret)
 
 	errCh := make(chan error, 1)
 	go func() {

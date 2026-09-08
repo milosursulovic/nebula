@@ -26,6 +26,7 @@ type Service interface {
 	Login(ctx context.Context, email, password string) (TokenPair, error)
 	Refresh(ctx context.Context, refreshToken string) (TokenPair, error)
 	Logout(ctx context.Context, refreshToken string) error
+	ListTenants(ctx context.Context) ([]Tenant, error)
 }
 
 type service struct {
@@ -102,6 +103,10 @@ func (s *service) Logout(ctx context.Context, refreshToken string) error {
 		return err
 	}
 	return s.repo.RevokeRefreshToken(ctx, rt.ID)
+}
+
+func (s *service) ListTenants(ctx context.Context) ([]Tenant, error) {
+	return s.repo.ListTenants(ctx)
 }
 
 func (s *service) lookupValidRefreshToken(ctx context.Context, raw string) (RefreshToken, error) {
