@@ -74,27 +74,30 @@ full section.
 | 7 | Kafka (transactional outbox, audit consumer) | `37860f4` |
 | 8 | Provisioning saga (real scheduling/reservation, compensation) | `5f662c7` |
 | 9 | Nebula Agent (registration, heartbeat, real metrics, mock VM ops over real HTTP) | `0040289` |
+| 10 | gRPC + TLS (protobuf via buf, control plane -> agent over gRPC, server-authenticated TLS) | `988674f` |
 
-**Next: Phase 10 — gRPC** (spec section 64/line 2699). Moves control
-plane -> agent communication (currently REST, `internal/provisioning/
-agent_steps.go` + `internal/agent/server.go`) to protobuf/gRPC, and adds
-TLS then mTLS.
+**Next: Phase 11 — KVM/libvirt** (spec section 65/line 2716). Replaces
+`internal/agent`'s mock `Store` with a real `Hypervisor` interface
+(`MockHypervisor`/`LibvirtHypervisor`, spec section 30) behind the gRPC
+surface Phase 10 just built — the RPC contract shouldn't need to change,
+only what's behind `internal/agent/server.go`'s handlers.
 
-**Known issue (found during Phase 8 verification, not Phase 8's own bug):**
-the audit Kafka consumer (`internal/audit`, reader wired in
-`cmd/nebula-api/main.go`) can hit `"Unable to establish connection to
-consumer group coordinator... Group Coordinator Not Available"` on a fresh
-`compose up` and then consume **zero** messages indefinitely — unlike the
-job pool/outbox publisher/node monitor, it doesn't appear to self-retry
-the coordinator connection. Reproduced once (~8 min stall, unstuck only
-after an external consumer forced a rebalance); not yet root-caused or
-fixed. Three separate Phase 9 verification runs saw the same coordinator
-error at startup but self-healed within seconds every time — the ~8 min
-stall may have been a fluke (possibly related to the manual Kafka CLI
-probing used to characterize it) rather than a reliably-reproducible bug;
-still worth a clean re-test (`compose up` -> `migrate up` -> wait a
-minute or two with zero manual Kafka CLI interference) before deciding
-whether it's a slow-retry or a fully wedged reader.
+**Known issue, now reproduced across Phases 8/9/10 (still not root-caused,
+not any one phase's own bug):** the audit Kafka consumer (`internal/
+audit`, reader wired in `cmd/nebula-api/main.go`) can hit `"Unable to
+establish connection to consumer group coordinator... Group Coordinator
+Not Available"` on a fresh `compose up` and then consume **zero** messages
+for several minutes — unlike the job pool/outbox publisher/node monitor,
+it doesn't appear to self-retry the coordinator connection promptly. The
+Phase 10 verification run reproduced a ~5 minute stall with *zero* manual
+Kafka CLI interference (ruling out the "manual probing caused it" theory
+from the Phase 9 notes) — outbox events were published fine the whole
+time, `audit_logs` just stayed empty until the consumer eventually caught
+up. This looks like a real, if slow-to-manifest, bug in `internal/audit`'s
+consumer setup (likely something in its `kafka.ReaderConfig` around
+retry/backoff on the initial coordinator lookup) and deserves a dedicated
+fix pass — next time a phase touches `internal/audit`/`internal/outbox`,
+or as a standalone fix, don't just re-verify around it again.
 
 ## Workflow for a new phase
 
@@ -212,6 +215,18 @@ whether it's a slow-retry or a fully wedged reader.
   from the background goroutines (node monitor, outbox publisher) that
   started before the migration landed. Self-heals the moment the migration
   applies — not a bug, don't chase it.
+- No `protoc`/`sudo apt-get` in this sandbox (no passwordless sudo) — use
+  `buf` (`go install github.com/bufbuild/buf/cmd/buf@latest`, pure Go,
+  ships its own compiler) plus `protoc-gen-go`/`protoc-gen-go-grpc`
+  (also `go install`-able) for any `.proto` regeneration. `make proto-gen`
+  wraps `buf generate`; generated `internal/agentpb/` is committed, not
+  regenerated at build/CI time.
+- `deployments/certs/nebula-agent.crt`/`.key` (Phase 10's dev-only TLS
+  cert) must exist before `docker compose build` — both Dockerfiles
+  `COPY` them in. If you ever need to regenerate it, both
+  `nebula-agent`'s server and `nebula-api`'s client trust config
+  (`NEBULA_AGENT_TLS_CA_FILE`) point at the same file — see
+  `deployments/certs/README.md`.
 
 ## Verification checklist per phase
 
