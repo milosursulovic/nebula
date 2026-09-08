@@ -10,8 +10,9 @@ const (
 	VMStatusRunning VMStatus = "RUNNING"
 )
 
-// VM is an in-memory record of one instance's VM on this node — a stand-in
-// until Phase 11 (KVM/libvirt) replaces the store with the real thing.
+// VM is a record of one instance's VM on this node — returned by both
+// Hypervisor implementations (MockHypervisor's in-memory Store, and
+// LibvirtHypervisor's real libvirt domain).
 type VM struct {
 	InstanceID string
 	Status     VMStatus
@@ -20,4 +21,14 @@ type VM struct {
 	DiskGB     int
 	Image      string
 	CreatedAt  time.Time
+}
+
+// VMSpec is what Hypervisor.CreateVM needs to define a VM (spec section
+// 30's Hypervisor interface).
+type VMSpec struct {
+	InstanceID string
+	CPU        int
+	MemoryMB   int
+	DiskGB     int
+	Image      string
 }

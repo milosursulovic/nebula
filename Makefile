@@ -2,7 +2,7 @@ DATABASE_URL ?= postgres://nebula:nebula@localhost:5432/nebula?sslmode=disable
 JWT_SECRET ?= dev-only-secret-change-me
 COMPOSE_FILE := deployments/compose/docker-compose.yml
 
-.PHONY: build run test vet migrate-up migrate-down compose-up compose-down proto-gen
+.PHONY: build run test vet test-libvirt vet-libvirt migrate-up migrate-down compose-up compose-down proto-gen
 
 build:
 	go build -o bin/nebula-api ./cmd/nebula-api
@@ -19,6 +19,14 @@ test:
 
 vet:
 	go vet ./...
+
+# Real libvirt/KVM backend — needs CGO + libvirt-dev, skipped by the
+# default test/vet (see README's Testing section).
+test-libvirt:
+	go test -tags libvirt ./internal/agent/...
+
+vet-libvirt:
+	go vet -tags libvirt ./...
 
 migrate-up:
 	migrate -path migrations -database "$(DATABASE_URL)" up

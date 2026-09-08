@@ -30,8 +30,12 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	store := agent.NewStore()
-	registrar := agent.NewRegistrar(cfg, store, logger)
+	hypervisor, err := agent.NewHypervisor(cfg)
+	if err != nil {
+		return err
+	}
+
+	registrar := agent.NewRegistrar(cfg, hypervisor, logger)
 
 	if err := registrar.Register(ctx); err != nil {
 		return err
@@ -44,7 +48,7 @@ func run(logger *slog.Logger) error {
 		registrar.RunHeartbeatLoop(ctx)
 	}()
 
-	grpcServer, lis, err := agent.NewServer(":"+cfg.Port, cfg.TLSCertFile, cfg.TLSKeyFile, store)
+	grpcServer, lis, err := agent.NewServer(":"+cfg.Port, cfg.TLSCertFile, cfg.TLSKeyFile, hypervisor)
 	if err != nil {
 		return err
 	}

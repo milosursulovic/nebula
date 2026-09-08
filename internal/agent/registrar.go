@@ -14,21 +14,21 @@ import (
 // heartbeating (spec sections 10/11's client side — the control-plane
 // endpoints already exist, nothing has ever called them until this agent).
 type Registrar struct {
-	cfg    Config
-	store  *Store
-	client *http.Client
-	logger *slog.Logger
+	cfg        Config
+	hypervisor Hypervisor
+	client     *http.Client
+	logger     *slog.Logger
 
 	nodeID    string
 	nodeToken string
 }
 
-func NewRegistrar(cfg Config, store *Store, logger *slog.Logger) *Registrar {
+func NewRegistrar(cfg Config, hypervisor Hypervisor, logger *slog.Logger) *Registrar {
 	return &Registrar{
-		cfg:    cfg,
-		store:  store,
-		client: &http.Client{Timeout: 5 * time.Second},
-		logger: logger,
+		cfg:        cfg,
+		hypervisor: hypervisor,
+		client:     &http.Client{Timeout: 5 * time.Second},
+		logger:     logger,
 	}
 }
 
@@ -138,12 +138,18 @@ func (r *Registrar) sendHeartbeat(ctx context.Context) {
 		return
 	}
 
+	count, err := r.hypervisor.CountVMs(ctx)
+	if err != nil {
+		r.logger.Error("nebula-agent: failed to count vms", "error", err)
+		return
+	}
+
 	body, err := json.Marshal(heartbeatRequest{
 		CPUUsage:         m.CPUUsage,
 		MemoryUsedMB:     m.MemUsedMB,
 		DiskUsedGB:       m.DiskUsedGB,
 		LoadAverage:      m.LoadAverage,
-		RunningInstances: r.store.Count(),
+		RunningInstances: count,
 	})
 	if err != nil {
 		r.logger.Error("nebula-agent: failed to marshal heartbeat", "error", err)

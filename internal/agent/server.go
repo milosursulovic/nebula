@@ -14,12 +14,13 @@ import (
 	"github.com/milosursulovic/nebula/internal/agentpb"
 )
 
-// grpcServer implements agentpb.NebulaAgentServer over the same Store the
-// Phase 9 REST server used — this is a transport swap (spec section 64:
-// "move control plane -> agent communication to gRPC"), not a redesign.
+// grpcServer implements agentpb.NebulaAgentServer over a Hypervisor (spec
+// section 30) — MockHypervisor by default, LibvirtHypervisor when built
+// with -tags libvirt. This is a transport swap over whichever backend is
+// wired in, not a redesign of either.
 type grpcServer struct {
 	agentpb.UnimplementedNebulaAgentServer
-	store *Store
+	hypervisor Hypervisor
 }
 
 // NewServer builds nebula-agent's TLS-enabled gRPC server, listening on
@@ -28,7 +29,7 @@ type grpcServer struct {
 // cert verification, is explicitly "later"). Server reflection is
 // registered so grpcurl can introspect the service without needing the
 // .proto file on hand.
-func NewServer(addr, certFile, keyFile string, store *Store) (*grpc.Server, net.Listener, error) {
+func NewServer(addr, certFile, keyFile string, hypervisor Hypervisor) (*grpc.Server, net.Listener, error) {
 	creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
 	if err != nil {
 		return nil, nil, err
@@ -40,7 +41,7 @@ func NewServer(addr, certFile, keyFile string, store *Store) (*grpc.Server, net.
 	}
 
 	srv := grpc.NewServer(grpc.Creds(creds))
-	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{store: store})
+	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{hypervisor: hypervisor})
 	reflection.Register(srv)
 
 	return srv, lis, nil
@@ -51,12 +52,16 @@ func (g *grpcServer) GetNodeInfo(ctx context.Context, _ *agentpb.GetNodeInfoRequ
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to collect metrics")
 	}
+	count, err := g.hypervisor.CountVMs(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to count vms")
+	}
 	return &agentpb.GetNodeInfoResponse{
 		CpuUsage:         m.CPUUsage,
 		MemoryUsedMb:     int64(m.MemUsedMB),
 		DiskUsedGb:       int64(m.DiskUsedGB),
 		LoadAverage:      m.LoadAverage,
-		RunningInstances: int32(g.store.Count()),
+		RunningInstances: int32(count),
 	}, nil
 }
 
@@ -64,17 +69,31 @@ func (g *grpcServer) CreateVM(ctx context.Context, req *agentpb.CreateVMRequest)
 	if req.GetInstanceId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "instance_id is required")
 	}
-	vm := g.store.Create(req.GetInstanceId(), int(req.GetCpu()), int(req.GetMemoryMb()), int(req.GetDiskGb()), req.GetImage())
-	return &agentpb.CreateVMResponse{InstanceId: vm.InstanceID, Status: string(vm.Status)}, nil
+	spec := VMSpec{
+		InstanceID: req.GetInstanceId(),
+		CPU:        int(req.GetCpu()),
+		MemoryMB:   int(req.GetMemoryMb()),
+		DiskGB:     int(req.GetDiskGb()),
+		Image:      req.GetImage(),
+	}
+	if err := g.hypervisor.CreateVM(ctx, spec); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &agentpb.CreateVMResponse{InstanceId: spec.InstanceID, Status: string(VMStatusStopped)}, nil
 }
 
 func (g *grpcServer) DeleteVM(ctx context.Context, req *agentpb.DeleteVMRequest) (*agentpb.DeleteVMResponse, error) {
-	g.store.Delete(req.GetInstanceId())
+	if err := g.hypervisor.DeleteVM(ctx, req.GetInstanceId()); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	return &agentpb.DeleteVMResponse{}, nil
 }
 
 func (g *grpcServer) StartVM(ctx context.Context, req *agentpb.StartVMRequest) (*agentpb.StartVMResponse, error) {
-	vm, err := g.store.Start(req.GetInstanceId())
+	if err := g.hypervisor.StartVM(ctx, req.GetInstanceId()); err != nil {
+		return nil, vmError(err)
+	}
+	vm, err := g.hypervisor.GetVMStatus(ctx, req.GetInstanceId())
 	if err != nil {
 		return nil, vmError(err)
 	}
@@ -82,7 +101,10 @@ func (g *grpcServer) StartVM(ctx context.Context, req *agentpb.StartVMRequest) (
 }
 
 func (g *grpcServer) StopVM(ctx context.Context, req *agentpb.StopVMRequest) (*agentpb.StopVMResponse, error) {
-	vm, err := g.store.Stop(req.GetInstanceId())
+	if err := g.hypervisor.StopVM(ctx, req.GetInstanceId()); err != nil {
+		return nil, vmError(err)
+	}
+	vm, err := g.hypervisor.GetVMStatus(ctx, req.GetInstanceId())
 	if err != nil {
 		return nil, vmError(err)
 	}
@@ -90,7 +112,7 @@ func (g *grpcServer) StopVM(ctx context.Context, req *agentpb.StopVMRequest) (*a
 }
 
 func (g *grpcServer) GetVMStatus(ctx context.Context, req *agentpb.GetVMStatusRequest) (*agentpb.GetVMStatusResponse, error) {
-	vm, err := g.store.Get(req.GetInstanceId())
+	vm, err := g.hypervisor.GetVMStatus(ctx, req.GetInstanceId())
 	if err != nil {
 		return nil, vmError(err)
 	}

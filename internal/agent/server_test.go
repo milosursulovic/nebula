@@ -23,7 +23,7 @@ func newTestClient(t *testing.T) (agentpb.NebulaAgentClient, *Store) {
 
 	store := NewStore()
 	srv := grpc.NewServer()
-	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{store: store})
+	agentpb.RegisterNebulaAgentServer(srv, &grpcServer{hypervisor: NewMockHypervisor(store)})
 
 	lis := bufconn.Listen(1024 * 1024)
 	go func() {

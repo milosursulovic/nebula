@@ -1,3 +1,5 @@
+<img src="docs/assets/logo.svg" alt="NEBULA logo" width="120" height="120">
+
 # NEBULA
 
 A miniature cloud infrastructure platform in Go — conceptually a simplified
@@ -121,9 +123,23 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   `.proto` file). TLS is server-authenticated only — the agent presents a
   cert, `nebula-api` verifies it against a pinned dev cert
   (`NEBULA_AGENT_TLS_CA_FILE`); mTLS (the agent verifying *its* caller)
-  is explicitly deferred (spec: "Later implement mTLS"). VM state is
-  in-memory only (`internal/agent/store.go`); Phase 11 replaces it with
-  libvirt.
+  is explicitly deferred (spec: "Later implement mTLS").
+- VM operations run behind a `Hypervisor` interface (spec section 30,
+  `internal/agent/hypervisor.go`) with two implementations, selected via
+  `NEBULA_AGENT_HYPERVISOR` (default `mock`):
+  - `MockHypervisor` — the same in-memory `Store` from Phase 9, wrapped
+    to satisfy the interface. What Docker Compose runs.
+  - `LibvirtHypervisor` (`NEBULA_AGENT_HYPERVISOR=libvirt`) — real
+    libvirt/KVM via `libvirt.org/go/libvirt`, gated behind a `libvirt` Go
+    build tag (needs CGO + `libvirt-dev`, not part of the default
+    build/Docker image). Domains it creates are deliberately
+    headless/diskless/netless (real disks and networking are Phase 13
+    and Phase 12's job) — this phase's honest scope is the real
+    create/start/stop/delete/status lifecycle against actual KVM, proven
+    by a test gated on real libvirtd connectivity
+    (`go test -tags libvirt ./internal/agent/...`, same
+    skip-cleanly-when-unavailable pattern as the Postgres concurrency
+    test). `qemu:///system` by default (`NEBULA_AGENT_LIBVIRT_URI`).
 - The dev TLS cert (`deployments/certs/`) is a static, checked-in
   self-signed cert+key — same "dev-only, change-me" precedent as the
   plaintext `JWT_SECRET`/`NEBULA_NODE_BOOTSTRAP_SECRET` values already in
@@ -218,3 +234,18 @@ make proto-gen
 make test
 make vet
 ```
+
+The `LibvirtHypervisor` backend (`internal/agent/libvirt_hypervisor.go`)
+is behind a `libvirt` build tag and needs CGO + `libvirt-dev` — the
+default `make test`/`make vet` never touch it. To build/test it on a
+Linux machine with libvirt installed:
+
+```
+sudo apt-get install libvirt-dev   # or your distro's equivalent
+go build -tags libvirt ./...
+go test -tags libvirt ./internal/agent/...
+```
+
+`libvirt.org/go/libvirt` is only imported by that tagged file, so a
+plain `go mod tidy` will see it as unused and strip it from `go.mod` —
+regenerate with `GOFLAGS=-tags=libvirt go mod tidy` instead.

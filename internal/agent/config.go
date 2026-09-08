@@ -22,6 +22,8 @@ type Config struct {
 	BootstrapSecret   string
 	TLSCertFile       string
 	TLSKeyFile        string
+	HypervisorBackend string
+	LibvirtURI        string
 }
 
 // Load reads configuration from the environment and validates it, failing
@@ -91,6 +93,8 @@ func Load() (Config, error) {
 		BootstrapSecret:   bootstrapSecret,
 		TLSCertFile:       tlsCertFile,
 		TLSKeyFile:        tlsKeyFile,
+		HypervisorBackend: getEnv("NEBULA_AGENT_HYPERVISOR", "mock"),
+		LibvirtURI:        getEnv("NEBULA_AGENT_LIBVIRT_URI", "qemu:///system"),
 	}, nil
 }
 
