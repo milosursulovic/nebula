@@ -79,13 +79,14 @@ full section.
 | 12 | Networking (network/subnet/IPAM, real saga integration, instance ip_address) | `af37aca` |
 | 13 | Storage (real sparse-file disks, agent gRPC disk RPCs, saga integration, attach/detach/resize API) | `d45209a` |
 | 14 | Observability (Prometheus, OpenTelemetry/Jaeger, Grafana dashboards) | `4a2c443` |
+| 15 | CLI (`nebula` binary; tenant list, node drain, instance start/stop endpoints) | `73db331` |
 
-**Next: Phase 15 — CLI** (spec section 69/line 2817). Linux bridge/veth/
-network-namespace device management (spec section 33) and real libvirt
-`<disk>`/`<interface>` device attachment both stay deferred — see the
-Phase 12/13 plans' own scope-boundary notes for why (no `CAP_NET_ADMIN`
-in this sandbox for the former; no bootable OS/image pipeline yet to make
-either meaningfully testable).
+**Next: Phase 16 — Failure Recovery** (spec section 70/line 2825). Linux
+bridge/veth/network-namespace device management (spec section 33) and
+real libvirt `<disk>`/`<interface>` device attachment both stay deferred
+— see the Phase 12/13 plans' own scope-boundary notes for why (no
+`CAP_NET_ADMIN` in this sandbox for the former; no bootable OS/image
+pipeline yet to make either meaningfully testable).
 
 **This sandbox has real libvirtd/qemu-kvm** (`libvirt-dev` installed
 Phase 11) — `LibvirtHypervisor` isn't theoretical, it's proven against
@@ -287,6 +288,15 @@ or as a standalone fix, don't just re-verify around it again.
   Hub — only fully-qualified patch tags (`1.62.0`, `1.63.0`, ...) plus
   `latest`. Compose pins `1.62.0`. If bumping, check the actual published
   tag list first, not just the minor version scheme other images use.
+- `GET /api/v1/networks` (list) has always returned bare `{id, name}` —
+  no `cidr`/`gateway` — while `GET /api/v1/networks/{id}` (get) returns
+  those via a nested `subnets[]` (`handleListNetworks` passes `nil`
+  subnets to `newNetworkResponse`, `handleGetNetwork` doesn't). Pre-
+  existing since Phase 12, surfaced by Phase 15's CLI (`nebula network
+  list`'s CIDR/GATEWAY columns always render `-`) but out of that phase's
+  scope to fix. Worth a real fix next time `internal/network`/
+  `pkg/api/network_handlers.go` gets touched — `List` would need to join
+  subnets same as `Get` does.
 - Grafana's host port `3000` isn't reserved by anything in this repo —
   on this particular dev machine it collided with an unrelated
   `pingvin-share-x` container already bound to `3000` (Phase 14
