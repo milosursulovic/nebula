@@ -12,7 +12,7 @@ import (
 
 func newJobTestServer(jobSvc job.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, fakeInstanceService{}, jobSvc, noopDeleteVM, testLogger(), testNodeBootstrapSecret), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, fakeInstanceService{}, jobSvc, fakeNetworkService{}, noopDeleteVM, noopReleaseIP, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func TestHandleListJobsRequiresSuperAdmin(t *testing.T) {

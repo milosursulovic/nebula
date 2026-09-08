@@ -21,6 +21,10 @@ type Service interface {
 	// SetNodeID records the node the provisioning saga reserved for this
 	// instance. See Repository.SetNodeID.
 	SetNodeID(ctx context.Context, tenantID, id, nodeID string) (Instance, error)
+
+	// SetIPAddress records the IP the saga's network step allocated for
+	// this instance. See Repository.SetIPAddress.
+	SetIPAddress(ctx context.Context, tenantID, id, ip string) (Instance, error)
 }
 
 type service struct {
@@ -99,6 +103,14 @@ func (s *service) Transition(ctx context.Context, tenantID, id string, to Status
 
 func (s *service) SetNodeID(ctx context.Context, tenantID, id, nodeID string) (Instance, error) {
 	updated, err := s.repo.SetNodeID(ctx, tenantID, id, nodeID)
+	if errors.Is(err, errNoRows) {
+		return Instance{}, ErrInvalidTransition // not PROVISIONING (or wrong tenant/missing)
+	}
+	return updated, err
+}
+
+func (s *service) SetIPAddress(ctx context.Context, tenantID, id, ip string) (Instance, error) {
+	updated, err := s.repo.SetIPAddress(ctx, tenantID, id, ip)
 	if errors.Is(err, errNoRows) {
 		return Instance{}, ErrInvalidTransition // not PROVISIONING (or wrong tenant/missing)
 	}

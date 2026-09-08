@@ -35,7 +35,10 @@ type Saga struct {
 }
 
 // Steps bundles all seven saga step implementations, letting a caller mix
-// sources (e.g. mocked disk/network with agent-backed VM ops).
+// sources (e.g. mocked disk with agent-backed VM ops and IPAM-backed
+// network). This is the only constructor — network can't be meaningfully
+// all-mocked since Phase 12 (it needs a real internal/network.Service);
+// tests construct a Saga literal directly instead (see saga_test.go).
 type Steps struct {
 	CreateDisk    DiskCreator
 	DeleteDisk    DiskDeleter
@@ -56,19 +59,6 @@ func NewSagaWithSteps(instances instance.Service, nodes node.Service, sched sche
 		createVM: steps.CreateVM, deleteVM: steps.DeleteVM,
 		startVM: steps.StartVM,
 	}
-}
-
-// NewSaga builds a Saga with the default (all-mock) steps — used by
-// tests. Tests also construct a Saga literal directly to inject a failing
-// fake for one specific step.
-func NewSaga(instances instance.Service, nodes node.Service, sched scheduler.Scheduler, logger *slog.Logger) *Saga {
-	mocks := NewMockSteps(logger)
-	return NewSagaWithSteps(instances, nodes, sched, logger, Steps{
-		CreateDisk: mocks.CreateDisk, DeleteDisk: mocks.DeleteDisk,
-		CreateNetwork: mocks.CreateNetwork, DeleteNetwork: mocks.DeleteNetwork,
-		CreateVM: mocks.CreateVM, DeleteVM: mocks.DeleteVM,
-		StartVM: mocks.StartVM,
-	})
 }
 
 // Provision runs the saga once for one instance. It's called once per
@@ -126,7 +116,8 @@ func (s *Saga) Provision(ctx context.Context, tenantID, instanceID string) error
 		}
 	})
 
-	if err := s.createNetwork(ctx, instanceID); err != nil {
+	ip, err := s.createNetwork(ctx, instanceID)
+	if err != nil {
 		return fail(fmt.Errorf("create network: %w", err))
 	}
 	compensations = append(compensations, func(ctx context.Context) {
@@ -134,6 +125,10 @@ func (s *Saga) Provision(ctx context.Context, tenantID, instanceID string) error
 			s.logger.Error("saga compensation: delete network failed", "instance_id", instanceID, "error", err)
 		}
 	})
+
+	if _, err := s.instances.SetIPAddress(ctx, tenantID, instanceID, ip); err != nil {
+		return fail(fmt.Errorf("set ip address: %w", err))
+	}
 
 	vmSpec := InstanceSpec{CPU: inst.CPU, MemoryMB: inst.MemoryMB, DiskGB: inst.DiskGB, Image: inst.Image}
 	if err := s.createVM(ctx, instanceID, chosen.ID, vmSpec); err != nil {

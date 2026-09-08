@@ -13,14 +13,15 @@ type InstanceSpec struct {
 }
 
 // The five saga steps (spec section 26) as named func types — mirrors
-// job.Handler's shape. Disk/network stay mocked this phase (see Saga's
-// doc comment); VM steps (Phase 9) call out to the node's nebula-agent.
-// These types are what let tests inject a failure at any one step
-// independently.
+// job.Handler's shape. Disk stays mocked this phase (Phase 13/Storage's
+// job); network is real (Phase 12: internal/network-backed IPAM, see
+// network_steps.go); VM steps (Phase 9) call out to the node's
+// nebula-agent. These types are what let tests inject a failure at any
+// one step independently.
 type (
 	DiskCreator    func(ctx context.Context, instanceID string, diskGB int) error
 	DiskDeleter    func(ctx context.Context, instanceID string) error
-	NetworkCreator func(ctx context.Context, instanceID string) error
+	NetworkCreator func(ctx context.Context, instanceID string) (ip string, err error)
 	NetworkDeleter func(ctx context.Context, instanceID string) error
 	VMCreator      func(ctx context.Context, instanceID, nodeID string, spec InstanceSpec) error
 	VMDeleter      func(ctx context.Context, instanceID, nodeID string) error

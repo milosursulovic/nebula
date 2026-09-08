@@ -13,7 +13,7 @@ import (
 
 func newInstanceTestServer(instanceSvc instance.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, noopDeleteVM, testLogger(), testNodeBootstrapSecret), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, noopDeleteVM, noopReleaseIP, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func userAuthHeader(t *testing.T, tokens auth.TokenIssuer, tenantID string) map[string]string {
@@ -175,9 +175,10 @@ func TestHandleDeleteInstanceInvalidTransition(t *testing.T) {
 
 func TestHandleDeleteInstanceReleasesNodeCapacity(t *testing.T) {
 	nodeID := "node-1"
+	ip := "10.20.0.5"
 	instanceSvc := fakeInstanceService{
 		deleteFn: func(ctx context.Context, tenantID, id string) (instance.Instance, error) {
-			return instance.Instance{ID: id, Status: instance.StatusDeleted, CPU: 2, MemoryMB: 4096, DiskGB: 50, NodeID: &nodeID}, nil
+			return instance.Instance{ID: id, Status: instance.StatusDeleted, CPU: 2, MemoryMB: 4096, DiskGB: 50, NodeID: &nodeID, IPAddress: &ip}, nil
 		},
 	}
 	released := false
@@ -199,8 +200,17 @@ func TestHandleDeleteInstanceReleasesNodeCapacity(t *testing.T) {
 		return nil
 	}
 
+	ipReleased := false
+	releaseIP := func(ctx context.Context, instanceID string) error {
+		ipReleased = true
+		if instanceID != "inst-1" {
+			t.Fatalf("unexpected releaseIP instanceID: %q", instanceID)
+		}
+		return nil
+	}
+
 	tokens := testTokenIssuer()
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, deleteVM, testLogger(), testNodeBootstrapSecret)
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, fakeNetworkService{}, deleteVM, releaseIP, testLogger(), testNodeBootstrapSecret)
 
 	rec := doJSON(t, srv, http.MethodDelete, "/api/v1/instances/inst-1", nil, userAuthHeader(t, tokens, "tenant-1"))
 
@@ -212,5 +222,8 @@ func TestHandleDeleteInstanceReleasesNodeCapacity(t *testing.T) {
 	}
 	if !vmDeleted {
 		t.Error("expected deleteVM to be called when deleted instance had a NodeID")
+	}
+	if !ipReleased {
+		t.Error("expected releaseIP to be called when deleted instance had an IPAddress")
 	}
 }

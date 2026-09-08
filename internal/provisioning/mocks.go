@@ -10,12 +10,12 @@ import (
 // 6's mock CREATE_INSTANCE handler.
 const mockStepDelay = 100 * time.Millisecond
 
-// MockSteps implements the disk/network/VM saga steps as simulated,
-// always-succeeding work (spec: "provisioning can still use mocks") —
-// stand-ins until Phases 11-13 (KVM/libvirt, Networking, Storage) build
-// the real thing. This is deliberately not persisted anywhere (no
-// instance_disks/networks tables yet) — see the Phase 8 plan's scope
-// boundary note.
+// MockSteps implements the disk saga steps as simulated, always-
+// succeeding work (spec: "provisioning can still use mocks") — a
+// stand-in until Phase 13 (Storage) builds the real thing. Network and
+// VM steps are real now (network_steps.go, agent_steps.go) — only disk
+// is still mocked. This is deliberately not persisted anywhere (no
+// instance_disks table yet) — see the Phase 8 plan's scope boundary note.
 type MockSteps struct {
 	logger *slog.Logger
 }
@@ -46,22 +46,6 @@ func (m *MockSteps) DeleteDisk(ctx context.Context, instanceID string) error {
 		return err
 	}
 	m.logger.Info("provisioning: disk deleted (mock)", "instance_id", instanceID)
-	return nil
-}
-
-func (m *MockSteps) CreateNetwork(ctx context.Context, instanceID string) error {
-	if err := m.simulateWork(ctx); err != nil {
-		return err
-	}
-	m.logger.Info("provisioning: network created (mock)", "instance_id", instanceID)
-	return nil
-}
-
-func (m *MockSteps) DeleteNetwork(ctx context.Context, instanceID string) error {
-	if err := m.simulateWork(ctx); err != nil {
-		return err
-	}
-	m.logger.Info("provisioning: network deleted (mock)", "instance_id", instanceID)
 	return nil
 }
 

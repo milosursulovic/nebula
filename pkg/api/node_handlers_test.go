@@ -12,7 +12,7 @@ import (
 
 func newNodeTestServer(nodeSvc node.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, fakeInstanceService{}, fakeJobService{}, noopDeleteVM, testLogger(), testNodeBootstrapSecret), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, noopDeleteVM, noopReleaseIP, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func superAdminAuthHeader(t *testing.T, tokens auth.TokenIssuer) map[string]string {

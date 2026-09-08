@@ -24,26 +24,28 @@ type createInstanceRequest struct {
 }
 
 type instanceResponse struct {
-	ID       string  `json:"id"`
-	Name     string  `json:"name"`
-	Status   string  `json:"status"`
-	CPU      int     `json:"cpu"`
-	MemoryMB int     `json:"memory_mb"`
-	DiskGB   int     `json:"disk_gb"`
-	Image    string  `json:"image"`
-	NodeID   *string `json:"node_id"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Status    string  `json:"status"`
+	CPU       int     `json:"cpu"`
+	MemoryMB  int     `json:"memory_mb"`
+	DiskGB    int     `json:"disk_gb"`
+	Image     string  `json:"image"`
+	NodeID    *string `json:"node_id"`
+	IPAddress *string `json:"ip_address"`
 }
 
 func newInstanceResponse(i instance.Instance) instanceResponse {
 	return instanceResponse{
-		ID:       i.ID,
-		Name:     i.Name,
-		Status:   string(i.Status),
-		CPU:      i.CPU,
-		MemoryMB: i.MemoryMB,
-		DiskGB:   i.DiskGB,
-		Image:    i.Image,
-		NodeID:   i.NodeID,
+		ID:        i.ID,
+		Name:      i.Name,
+		Status:    string(i.Status),
+		CPU:       i.CPU,
+		MemoryMB:  i.MemoryMB,
+		DiskGB:    i.DiskGB,
+		Image:     i.Image,
+		NodeID:    i.NodeID,
+		IPAddress: i.IPAddress,
 	}
 }
 
@@ -135,7 +137,7 @@ func handleGetInstance(svc instance.Service) http.HandlerFunc {
 	}
 }
 
-func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, deleteVM provisioning.VMDeleter, logger *slog.Logger) http.HandlerFunc {
+func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -174,6 +176,17 @@ func handleDeleteInstance(svc instance.Service, nodeSvc node.Service, deleteVM p
 			if _, err := nodeSvc.Release(r.Context(), *deleted.NodeID, deleted.CPU, deleted.MemoryMB, deleted.DiskGB); err != nil {
 				logger.Error("failed to release node capacity after instance delete",
 					"instance_id", deleted.ID, "node_id", *deleted.NodeID, "error", err)
+			}
+		}
+
+		// The saga's network step (Phase 12) may have allocated a real IP
+		// independently of node/VM state (it runs after createDisk, before
+		// createVM) — release it on its own condition, best-effort, same
+		// shape as the node/VM cleanup above.
+		if deleted.IPAddress != nil {
+			if err := releaseIP(r.Context(), deleted.ID); err != nil {
+				logger.Error("failed to release ip after instance delete",
+					"instance_id", deleted.ID, "ip_address", *deleted.IPAddress, "error", err)
 			}
 		}
 

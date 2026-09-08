@@ -55,6 +55,7 @@ type Instance struct {
 	DiskGB    int
 	Image     string
 	NodeID    *string // assigned by the scheduler; nil until then
+	IPAddress *string // assigned by the provisioning saga's network step; nil until then
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

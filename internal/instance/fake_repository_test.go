@@ -92,3 +92,18 @@ func (f *fakeRepository) SetNodeID(ctx context.Context, tenantID, id, nodeID str
 	f.instances[id] = i
 	return i, nil
 }
+
+func (f *fakeRepository) SetIPAddress(ctx context.Context, tenantID, id, ip string) (Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	i, ok := f.instances[id]
+	if !ok || i.TenantID != tenantID || i.Status != StatusProvisioning {
+		return Instance{}, errNoRows
+	}
+
+	i.IPAddress = &ip
+	i.UpdatedAt = time.Now()
+	f.instances[id] = i
+	return i, nil
+}

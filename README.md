@@ -60,10 +60,10 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   authenticated tenant member. Create returns immediately with
   `status: "PENDING"` and enqueues a `CREATE_INSTANCE` job; a worker then
   runs the provisioning saga (see below), landing the instance on
-  `RUNNING` with a real `node_id` — or `ERROR` if provisioning failed.
-  Delete tears down the VM on the node's agent and releases the instance's
-  reserved node capacity (both best-effort) if it had been scheduled onto
-  one.
+  `RUNNING` with a real `node_id` and `ip_address` — or `ERROR` if
+  provisioning failed. Delete tears down the VM on the node's agent and
+  releases the instance's reserved node capacity and allocated IP (all
+  best-effort) if it had gotten that far.
 - An explicit state machine (`PENDING → PROVISIONING → RUNNING → STOPPING →
   STOPPED`, plus `ERROR`/`DELETING`/`DELETED`) rejects invalid transitions;
   `ERROR → PROVISIONING` lets a job retry re-enter the saga; delete is a
@@ -90,19 +90,47 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
 **Provisioning saga** (`internal/provisioning/`)
 - Drives each `CREATE_INSTANCE` job attempt through: schedule a node →
   reserve its capacity → set `node_id` → create disk → create network →
-  create VM → start VM → transition to `RUNNING`. Disk/network steps are
-  local mocks (simulated work, always succeed) — real implementations are
-  Phase 12 (Networking) and Phase 13 (Storage)'s job. Resource reservation
-  is real, and VM steps are real gRPC calls (TLS-secured) to the target
-  node's `nebula-agent` (see below) — the agent's own VM backend is still
-  mocked (Phase 11/KVM's job), but a real, authenticated network hop
-  happens now, not an in-process function call.
+  set `ip_address` → create VM → start VM → transition to `RUNNING`. Disk
+  stays a local mock (simulated work, always succeeds) — a real
+  implementation is Phase 13 (Storage)'s job. Resource reservation and
+  network allocation are both real, and VM steps are real gRPC calls
+  (TLS-secured) to the target node's `nebula-agent` (see below) — the
+  agent's own VM backend is still mocked (Phase 11/KVM's job), but a
+  real, authenticated network hop happens now, not an in-process
+  function call.
 - Any step's failure compensates in reverse order — exactly the spec's
   worked example: create VM fails → delete network → delete disk →
   release reservation — then transitions the instance to `ERROR`. A job
   retry re-invokes the saga from scratch, re-scheduling fresh (possibly
   onto a different node) rather than assuming the prior choice still
   holds.
+
+**Networking & IPAM** (`internal/network/`)
+- `Network`/`Subnet` follow AWS VPC/Subnet's 1:many shape (spec section
+  31's example bundles a network with one subnet + gateway).
+  `POST /api/v1/networks` (`SUPER_ADMIN`-gated, like nodes) creates both
+  in one call — `{name, cidr, gateway}` — and pre-populates the subnet's
+  full IP pool as individual rows (one per usable host address, excluding
+  network/broadcast/gateway). A safety cap rejects subnets larger than
+  `/16`. `GET /api/v1/networks`, `GET /api/v1/networks/{id}`.
+- IPAM (spec section 32): allocate/release/reserve an IP, preventing
+  duplicate allocation under concurrency via the same row-locking
+  queue-claim pattern job dispatch already uses (`SELECT ... FOR UPDATE
+  SKIP LOCKED` against `AVAILABLE` rows) — not a third concurrency
+  pattern, the existing one reapplied to a new resource. Allocation is
+  idempotent by instance ID, closing the "saga crashes after allocating,
+  job retry re-runs from scratch" leak a naive always-allocate would
+  have. The mandatory 100-concurrent-goroutine test
+  (`internal/network/ip_allocation_concurrency_test.go`, gated on
+  `NEBULA_DATABASE_URL` like the node/scheduler ones) proves every
+  concurrent allocation gets a unique address.
+- The provisioning saga's `create network` step (above) calls this real
+  IPAM instead of a mock, setting the instance's `ip_address`; delete
+  releases it. No Linux bridge/veth/network-namespace device is created
+  anywhere yet — spec section 33 frames that as "Eventually," and there's
+  neither a safe way to test it in this environment (no `CAP_NET_ADMIN`)
+  nor, yet, a real network interface on a libvirt domain to attach it to
+  (Phase 11's domains are still deviceless). Deferred until both exist.
 
 **Nebula Agent** (`cmd/nebula-agent`, `internal/agent/`, `internal/agentpb/`)
 - A separate binary that runs on each compute node (spec section 27) — the

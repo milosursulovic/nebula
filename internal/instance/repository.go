@@ -56,6 +56,10 @@ type Repository interface {
 	// calls around it already fire the real ones); guarded to only apply
 	// while PROVISIONING. Returns errNoRows if that guard fails.
 	SetNodeID(ctx context.Context, tenantID, id, nodeID string) (Instance, error)
+
+	// SetIPAddress records the IP the saga's network step allocated for
+	// this instance. Same shape/guard as SetNodeID.
+	SetIPAddress(ctx context.Context, tenantID, id, ip string) (Instance, error)
 }
 
 type pgxRepository struct {
@@ -66,13 +70,18 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 	return &pgxRepository{pool: pool}
 }
 
-const selectColumns = `id, tenant_id, name, status, cpu, memory_mb, disk_gb, image, node_id, created_at, updated_at`
+// ip_address goes through host() — pgx's inet codec only scans into
+// netip.Addr/netip.Prefix, not *string, so every selectColumns use would
+// otherwise need a special case; host() (not a bare ::text cast) is what
+// strips inet's netmask suffix (a plain cast renders "10.20.0.2/32", not
+// "10.20.0.2").
+const selectColumns = `id, tenant_id, name, status, cpu, memory_mb, disk_gb, image, node_id, host(ip_address), created_at, updated_at`
 
 func scanInstance(row pgx.Row) (Instance, error) {
 	var i Instance
 	err := row.Scan(
 		&i.ID, &i.TenantID, &i.Name, &i.Status, &i.CPU, &i.MemoryMB, &i.DiskGB,
-		&i.Image, &i.NodeID, &i.CreatedAt, &i.UpdatedAt,
+		&i.Image, &i.NodeID, &i.IPAddress, &i.CreatedAt, &i.UpdatedAt,
 	)
 	return i, err
 }
@@ -185,6 +194,20 @@ func (r *pgxRepository) SetNodeID(ctx context.Context, tenantID, id, nodeID stri
 		WHERE id = $1 AND tenant_id = $2 AND status = 'PROVISIONING'
 		RETURNING `+selectColumns,
 		id, tenantID, nodeID,
+	)
+	i, err := scanInstance(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Instance{}, errNoRows
+	}
+	return i, err
+}
+
+func (r *pgxRepository) SetIPAddress(ctx context.Context, tenantID, id, ip string) (Instance, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE instances SET ip_address = $3::inet, updated_at = now()
+		WHERE id = $1 AND tenant_id = $2 AND status = 'PROVISIONING'
+		RETURNING `+selectColumns,
+		id, tenantID, ip,
 	)
 	i, err := scanInstance(row)
 	if errors.Is(err, pgx.ErrNoRows) {

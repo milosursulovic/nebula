@@ -89,6 +89,19 @@ func (f *fakeInstances) SetNodeID(ctx context.Context, tenantID, id, nodeID stri
 	return i, nil
 }
 
+func (f *fakeInstances) SetIPAddress(ctx context.Context, tenantID, id, ip string) (instance.Instance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i, ok := f.data[id]
+	if !ok || i.Status != instance.StatusProvisioning {
+		return instance.Instance{}, instance.ErrInvalidTransition
+	}
+	i.IPAddress = &ip
+	f.data[id] = i
+	f.rec.record("set_ip_address:" + ip)
+	return i, nil
+}
+
 func (f *fakeInstances) status(id string) instance.Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -172,7 +185,9 @@ func recordingSteps(rec *callRecorder, failStep string, failErr error) (
 	}
 	createDisk = func(ctx context.Context, instanceID string, diskGB int) error { return step("create_disk") }
 	deleteDisk = func(ctx context.Context, instanceID string) error { return step("delete_disk") }
-	createNetwork = func(ctx context.Context, instanceID string) error { return step("create_network") }
+	createNetwork = func(ctx context.Context, instanceID string) (string, error) {
+		return "10.20.0.99", step("create_network")
+	}
 	deleteNetwork = func(ctx context.Context, instanceID string) error { return step("delete_network") }
 	createVM = func(ctx context.Context, instanceID, nodeID string, spec InstanceSpec) error {
 		return step("create_vm")
@@ -220,7 +235,7 @@ func TestSagaHappyPath(t *testing.T) {
 	}
 	assertTrace(t, rec, []string{
 		"transition:PROVISIONING", "schedule", "reserve:node-1", "set_node_id:node-1",
-		"create_disk", "create_network", "create_vm", "start_vm", "transition:RUNNING",
+		"create_disk", "create_network", "set_ip_address:10.20.0.99", "create_vm", "start_vm", "transition:RUNNING",
 	})
 }
 
@@ -313,7 +328,7 @@ func TestSagaFailsAtCreateVM(t *testing.T) {
 
 	assertTrace(t, rec, []string{
 		"transition:PROVISIONING", "schedule", "reserve:node-1", "set_node_id:node-1",
-		"create_disk", "create_network", "create_vm",
+		"create_disk", "create_network", "set_ip_address:10.20.0.99", "create_vm",
 		"delete_network", "delete_disk", "release:node-1", "transition:ERROR",
 	})
 }
@@ -331,7 +346,7 @@ func TestSagaFailsAtStartVM(t *testing.T) {
 
 	assertTrace(t, rec, []string{
 		"transition:PROVISIONING", "schedule", "reserve:node-1", "set_node_id:node-1",
-		"create_disk", "create_network", "create_vm", "start_vm",
+		"create_disk", "create_network", "set_ip_address:10.20.0.99", "create_vm", "start_vm",
 		"delete_vm", "delete_network", "delete_disk", "release:node-1", "transition:ERROR",
 	})
 }
@@ -359,23 +374,5 @@ func TestSagaRetryAfterFailureSucceeds(t *testing.T) {
 	}
 	if insts.status("inst-1") != instance.StatusRunning {
 		t.Errorf("status after retry = %q, want RUNNING", insts.status("inst-1"))
-	}
-}
-
-func TestNewSagaDefaultsToMockSteps(t *testing.T) {
-	// Smoke test for the constructor used in production (main.go) — just
-	// confirms it wires a usable Saga without panicking, using the real
-	// mock steps end to end.
-	rec := &callRecorder{}
-	insts := newFakeInstances(rec, newPendingInstance())
-	nodes := &fakeNodes{rec: rec}
-	sched := &fakeScheduler{rec: rec, node: node.Node{ID: "node-1"}}
-
-	saga := NewSaga(insts, nodes, sched, testLogger())
-	if err := saga.Provision(context.Background(), "tenant-1", "inst-1"); err != nil {
-		t.Fatalf("Provision with default mock steps: %v", err)
-	}
-	if insts.status("inst-1") != instance.StatusRunning {
-		t.Errorf("status = %q, want RUNNING", insts.status("inst-1"))
 	}
 }

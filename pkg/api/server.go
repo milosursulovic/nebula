@@ -11,12 +11,13 @@ import (
 	"github.com/milosursulovic/nebula/internal/auth"
 	"github.com/milosursulovic/nebula/internal/instance"
 	"github.com/milosursulovic/nebula/internal/job"
+	"github.com/milosursulovic/nebula/internal/network"
 	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/internal/provisioning"
 )
 
 // NewServer builds the nebula-api HTTP server: router, middleware, and routes.
-func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, deleteVM provisioning.VMDeleter, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
+func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, networkSvc network.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -61,7 +62,16 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 			r.Post("/", handleCreateInstance(instanceSvc))
 			r.Get("/", handleListInstances(instanceSvc))
 			r.Get("/{id}", handleGetInstance(instanceSvc))
-			r.Delete("/{id}", handleDeleteInstance(instanceSvc, nodeSvc, deleteVM, logger))
+			r.Delete("/{id}", handleDeleteInstance(instanceSvc, nodeSvc, deleteVM, releaseIP, logger))
+		})
+
+		r.Route("/networks", func(r chi.Router) {
+			r.Use(auth.Authenticate(tokens))
+			r.Use(auth.RequireRole(auth.RoleSuperAdmin))
+
+			r.Post("/", handleCreateNetwork(networkSvc))
+			r.Get("/", handleListNetworks(networkSvc))
+			r.Get("/{id}", handleGetNetwork(networkSvc))
 		})
 
 		r.Route("/jobs", func(r chi.Router) {
