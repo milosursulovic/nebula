@@ -22,6 +22,7 @@ type Config struct {
 	BootstrapSecret   string
 	TLSCertFile       string
 	TLSKeyFile        string
+	ClientCAFile      string
 	HypervisorBackend string
 	LibvirtURI        string
 	DiskRoot          string
@@ -54,6 +55,13 @@ func Load() (Config, error) {
 	tlsKeyFile := os.Getenv("NEBULA_AGENT_TLS_KEY_FILE")
 	if tlsKeyFile == "" {
 		return Config{}, fmt.Errorf("NEBULA_AGENT_TLS_KEY_FILE is required")
+	}
+	// Phase 18: mTLS is mandatory now, not "later" — the exact client
+	// cert nebula-api presents, trusted as its own CA (same dev pattern
+	// as the server cert above).
+	clientCAFile := os.Getenv("NEBULA_AGENT_CLIENT_CA_FILE")
+	if clientCAFile == "" {
+		return Config{}, fmt.Errorf("NEBULA_AGENT_CLIENT_CA_FILE is required")
 	}
 
 	hostname := os.Getenv("NEBULA_AGENT_HOSTNAME")
@@ -95,6 +103,7 @@ func Load() (Config, error) {
 		BootstrapSecret:   bootstrapSecret,
 		TLSCertFile:       tlsCertFile,
 		TLSKeyFile:        tlsKeyFile,
+		ClientCAFile:      clientCAFile,
 		HypervisorBackend: getEnv("NEBULA_AGENT_HYPERVISOR", "mock"),
 		LibvirtURI:        getEnv("NEBULA_AGENT_LIBVIRT_URI", "qemu:///system"),
 		DiskRoot:          getEnv("NEBULA_AGENT_DISK_ROOT", "/var/lib/nebula/disks"),

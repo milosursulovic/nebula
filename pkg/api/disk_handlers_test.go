@@ -13,7 +13,7 @@ import (
 
 func newDiskTestServer(instanceSvc instance.Service, storageSvc storage.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, storageSvc, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, storageSvc, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, newFakeLimiter(), false, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func scheduledInstance(nodeID string) fakeInstanceService {

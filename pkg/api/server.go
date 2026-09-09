@@ -18,15 +18,21 @@ import (
 	"github.com/milosursulovic/nebula/internal/network"
 	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/internal/provisioning"
+	"github.com/milosursulovic/nebula/internal/ratelimit"
 	"github.com/milosursulovic/nebula/internal/storage"
 )
 
-// NewServer builds the nebula-api HTTP server: router, middleware, and routes.
-func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, networkSvc network.Service, storageSvc storage.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, startVM provisioning.VMStarter, stopVM provisioning.VMStopper, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
+// NewServer builds the nebula-api HTTP server: router, middleware, and
+// routes. tlsEnabled only affects which headers get set (Strict-
+// Transport-Security is meaningless, and wrong, to send over plain HTTP)
+// — the caller (cmd/nebula-api/main.go) decides whether to actually call
+// ListenAndServe or ListenAndServeTLS based on the same config.
+func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIssuer, nodeSvc node.Service, instanceSvc instance.Service, jobSvc job.Service, networkSvc network.Service, storageSvc storage.Service, deleteVM provisioning.VMDeleter, releaseIP provisioning.NetworkDeleter, startVM provisioning.VMStarter, stopVM provisioning.VMStopper, limiter ratelimit.Limiter, tlsEnabled bool, logger *slog.Logger, nodeBootstrapSecret string) *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 	r.Use(requestLogger(logger))
+	r.Use(securityHeaders(tlsEnabled))
 
 	r.Get("/health", handleHealth)
 	r.Get("/ready", handleReady(db))
@@ -57,6 +63,7 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 
 			r.Group(func(r chi.Router) {
 				r.Use(auth.Authenticate(tokens))
+				r.Use(rateLimit(limiter))
 				r.Use(auth.RequireRole(auth.RoleSuperAdmin))
 
 				r.Get("/", handleListNodes(nodeSvc))
@@ -67,6 +74,7 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 
 		r.Route("/tenants", func(r chi.Router) {
 			r.Use(auth.Authenticate(tokens))
+			r.Use(rateLimit(limiter))
 			r.Use(auth.RequireRole(auth.RoleSuperAdmin))
 
 			r.Get("/", handleListTenants(authSvc))
@@ -74,6 +82,7 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 
 		r.Route("/instances", func(r chi.Router) {
 			r.Use(auth.Authenticate(tokens))
+			r.Use(rateLimit(limiter))
 
 			r.Post("/", handleCreateInstance(instanceSvc))
 			r.Get("/", handleListInstances(instanceSvc))
@@ -88,6 +97,7 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 
 		r.Route("/disks", func(r chi.Router) {
 			r.Use(auth.Authenticate(tokens))
+			r.Use(rateLimit(limiter))
 
 			r.Get("/{id}", handleGetDisk(storageSvc))
 			r.Delete("/{id}", handleDeleteDisk(storageSvc))
@@ -98,6 +108,7 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 
 		r.Route("/networks", func(r chi.Router) {
 			r.Use(auth.Authenticate(tokens))
+			r.Use(rateLimit(limiter))
 			r.Use(auth.RequireRole(auth.RoleSuperAdmin))
 
 			r.Post("/", handleCreateNetwork(networkSvc))
@@ -107,6 +118,7 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 
 		r.Route("/jobs", func(r chi.Router) {
 			r.Use(auth.Authenticate(tokens))
+			r.Use(rateLimit(limiter))
 			r.Use(auth.RequireRole(auth.RoleSuperAdmin))
 
 			r.Get("/", handleListJobs(jobSvc))
@@ -130,6 +142,68 @@ func NewServer(addr string, db Pinger, authSvc auth.Service, tokens auth.TokenIs
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
+// rateLimitUserPerMinute / rateLimitTenantPerMinute are spec section 37's
+// own worked example numbers.
+const (
+	rateLimitUserPerMinute   = 100
+	rateLimitTenantPerMinute = 1000
+)
+
+// rateLimit enforces spec section 37's per-user and per-tenant request
+// limits — applied inside each already-authenticated route group (after
+// auth.Authenticate, so identity is available), never at the top level:
+// chi middleware order means a router-wide r.Use would run before any
+// route-group's own auth.Authenticate, where there's no identity yet.
+// Per-IP limiting is spec's own "Eventually" item, not built.
+func rateLimit(limiter ratelimit.Limiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			identity, ok := auth.IdentityFromContext(r.Context())
+			if !ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			userOK, err := limiter.Allow(r.Context(), "ratelimit:user:"+identity.UserID, rateLimitUserPerMinute, time.Minute)
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "rate limit check failed")
+				return
+			}
+			tenantOK, err := limiter.Allow(r.Context(), "ratelimit:tenant:"+identity.TenantID, rateLimitTenantPerMinute, time.Minute)
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "rate limit check failed")
+				return
+			}
+			if !userOK || !tenantOK {
+				writeError(w, r, http.StatusTooManyRequests, "RATE_LIMIT_EXCEEDED", "too many requests, slow down")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// securityHeaders sets standard hardening headers on every response.
+// Strict-Transport-Security is only meaningful (and only correct) when
+// actually serving over TLS — sending it over plain HTTP would tell
+// browsers to force HTTPS for a server that doesn't have it.
+func securityHeaders(tlsEnabled bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			if tlsEnabled {
+				w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 

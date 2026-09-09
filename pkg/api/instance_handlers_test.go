@@ -14,7 +14,7 @@ import (
 
 func newInstanceTestServer(instanceSvc instance.Service) (*http.Server, auth.TokenIssuer) {
 	tokens := testTokenIssuer()
-	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret), tokens
+	return NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, newFakeLimiter(), false, testLogger(), testNodeBootstrapSecret), tokens
 }
 
 func userAuthHeader(t *testing.T, tokens auth.TokenIssuer, tenantID string) map[string]string {
@@ -155,7 +155,7 @@ func TestHandleStopInstanceSuccess(t *testing.T) {
 	}
 
 	tokens := testTokenIssuer()
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, stopVM, testLogger(), testNodeBootstrapSecret)
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, stopVM, newFakeLimiter(), false, testLogger(), testNodeBootstrapSecret)
 
 	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/stop", nil, userAuthHeader(t, tokens, "tenant-1"))
 
@@ -199,7 +199,7 @@ func TestHandleStopInstanceAgentErrorMarksError(t *testing.T) {
 	}
 
 	tokens := testTokenIssuer()
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, stopVM, testLogger(), testNodeBootstrapSecret)
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, stopVM, newFakeLimiter(), false, testLogger(), testNodeBootstrapSecret)
 
 	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/stop", nil, userAuthHeader(t, tokens, "tenant-1"))
 
@@ -234,7 +234,7 @@ func TestHandleStartInstanceSuccess(t *testing.T) {
 	}
 
 	tokens := testTokenIssuer()
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, startVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, startVM, noopStopVM, newFakeLimiter(), false, testLogger(), testNodeBootstrapSecret)
 
 	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/start", nil, userAuthHeader(t, tokens, "tenant-1"))
 
@@ -286,7 +286,7 @@ func TestHandleStartInstanceAgentErrorLeavesStopped(t *testing.T) {
 	}
 
 	tokens := testTokenIssuer()
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, startVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, fakeNodeService{}, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, startVM, noopStopVM, newFakeLimiter(), false, testLogger(), testNodeBootstrapSecret)
 
 	rec := doJSON(t, srv, http.MethodPost, "/api/v1/instances/inst-1/start", nil, userAuthHeader(t, tokens, "tenant-1"))
 
@@ -373,7 +373,7 @@ func TestHandleDeleteInstanceReleasesNodeCapacity(t *testing.T) {
 	}
 
 	tokens := testTokenIssuer()
-	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, deleteVM, releaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
+	srv := NewServer(":0", fakePinger{}, fakeAuthService{}, tokens, nodeSvc, instanceSvc, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, deleteVM, releaseIP, noopStartVM, noopStopVM, newFakeLimiter(), false, testLogger(), testNodeBootstrapSecret)
 
 	rec := doJSON(t, srv, http.MethodDelete, "/api/v1/instances/inst-1", nil, userAuthHeader(t, tokens, "tenant-1"))
 

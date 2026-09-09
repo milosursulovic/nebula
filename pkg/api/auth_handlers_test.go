@@ -12,7 +12,7 @@ import (
 )
 
 func newAuthTestServer(authSvc auth.Service, tokens auth.TokenIssuer) *http.Server {
-	return NewServer(":0", fakePinger{}, authSvc, tokens, fakeNodeService{}, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, testLogger(), testNodeBootstrapSecret)
+	return NewServer(":0", fakePinger{}, authSvc, tokens, fakeNodeService{}, fakeInstanceService{}, fakeJobService{}, fakeNetworkService{}, fakeStorageService{}, noopDeleteVM, noopReleaseIP, noopStartVM, noopStopVM, newFakeLimiter(), false, testLogger(), testNodeBootstrapSecret)
 }
 
 func doJSON(t *testing.T, srv *http.Server, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {

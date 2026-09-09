@@ -13,8 +13,29 @@ Nomad, and Proxmox. Full design spec: `docs/nebula.pdf`.
 **HTTP API** (`cmd/nebula-api`)
 - `/health` (liveness) and `/ready` (readiness, checks PostgreSQL).
 - Env-based configuration with fail-fast validation
-  (`internal/common/config.go`).
-- Graceful shutdown on SIGINT/SIGTERM.
+  (`internal/common/config.go`) — required fields, plus structural
+  checks (`NEBULA_HTTP_PORT` must be a valid 1-65535 port; an optional
+  TLS cert must come with its key, never one without the other).
+- TLS for the HTTP surface itself is real but **opt-in, off by
+  default** — set `NEBULA_TLS_CERT_FILE`/`NEBULA_TLS_KEY_FILE` to switch
+  from `ListenAndServe` to `ListenAndServeTLS`; every curl example in
+  this README and the CLI's default URL assume it's off, which is the
+  default in `docker-compose.yml`. `Strict-Transport-Security` is only
+  ever sent when TLS is actually on.
+- Every response carries baseline security headers
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`); the
+  server also sets `ReadTimeout`/`WriteTimeout`/`IdleTimeout` (not just
+  the pre-existing `ReadHeaderTimeout`).
+- Rate limiting (spec section 37): Redis-backed, per-user (100/min) and
+  per-tenant (1000/min), applied to every authenticated route group —
+  exceeding either returns `429 RATE_LIMIT_EXCEEDED`. Per-IP limiting is
+  spec's own "Eventually" item, not built.
+- Graceful shutdown on SIGINT/SIGTERM follows spec section 40's exact
+  sequence: stop accepting requests → stop Kafka consumers → stop
+  workers → flush telemetry → close the database (each background loop
+  now stops on its own independently-cancelled context instead of one
+  shared signal context, so the stages are actually sequenced, not
+  simultaneous).
 
 **Authentication & RBAC** (`internal/auth/`)
 - JWT access tokens + rotating opaque refresh tokens; bcrypt password
@@ -223,10 +244,21 @@ UPDATE tenant_members SET role = 'SUPER_ADMIN' WHERE user_id = '<id>';
   control-plane → agent direction; Phase 9's
   REST version of this same surface is fully replaced, not kept
   alongside. Server reflection is enabled (`grpcurl` works without the
-  `.proto` file). TLS is server-authenticated only — the agent presents a
-  cert, `nebula-api` verifies it against a pinned dev cert
-  (`NEBULA_AGENT_TLS_CA_FILE`); mTLS (the agent verifying *its* caller)
-  is explicitly deferred (spec: "Later implement mTLS").
+  `.proto` file). **mTLS** (spec section 51: "Use mTLS later") — the
+  agent now requires and verifies a client certificate from every
+  caller (`tls.RequireAndVerifyClientCert`), pinned to exactly
+  `nebula-api`'s own client cert (`NEBULA_AGENT_CLIENT_CA_FILE`), same
+  self-signed-cert-is-its-own-trust-anchor dev pattern as the existing
+  server-side pinning (`NEBULA_AGENT_TLS_CA_FILE`); `nebula-api`
+  presents that cert via `NEBULA_AGENT_CLIENT_TLS_CERT_FILE`/`_KEY_FILE`.
+  A caller without it is rejected outright — closing the "mTLS later"
+  deferral from Phase 10.
+- Every gRPC call `AgentSteps` makes to an agent goes through a small
+  per-node circuit breaker (`internal/provisioning/circuit_breaker.go`)
+  — 5 consecutive failures against one node opens it for a 30s cooldown,
+  failing immediately instead of paying the full gRPC timeout again on
+  a node that's very likely still down; one trial call after cooldown
+  either closes it or reopens it.
 - VM operations run behind a `Hypervisor` interface (spec section 30,
   `internal/agent/hypervisor.go`) with two implementations, selected via
   `NEBULA_AGENT_HYPERVISOR` (default `mock`):
@@ -382,7 +414,8 @@ curl localhost:8080/ready
 
 Also brought up by `make compose-up`: Prometheus (`localhost:9090`),
 Jaeger UI (`localhost:16686`), Grafana (`localhost:3000`, `admin`/`admin`,
-7 dashboards auto-provisioned under the "NEBULA" folder).
+7 dashboards auto-provisioned under the "NEBULA" folder), and Redis
+(`localhost:6379`, rate-limit counters only).
 
 Or run the API against your own Postgres:
 

@@ -66,7 +66,7 @@ func run(logger *slog.Logger) error {
 		registrar.RunHeartbeatLoop(ctx)
 	}()
 
-	grpcServer, lis, err := agent.NewServer(":"+cfg.Port, cfg.TLSCertFile, cfg.TLSKeyFile, hypervisor, diskStore)
+	grpcServer, lis, err := agent.NewServer(":"+cfg.Port, cfg.TLSCertFile, cfg.TLSKeyFile, cfg.ClientCAFile, hypervisor, diskStore)
 	if err != nil {
 		return err
 	}

@@ -2,8 +2,11 @@ package provisioning
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -30,25 +33,48 @@ type AgentSteps struct {
 	nodes     node.Service
 	agentPort string
 	creds     credentials.TransportCredentials
+	breakers  *circuitBreakers
 	logger    *slog.Logger
 }
 
 // NewAgentSteps builds AgentSteps. tlsCAFile is the agent's own
 // (self-signed, dev-only) server certificate, pinned as the trust anchor
-// — server-authenticated TLS only this phase; mTLS (agent verifying the
-// caller) is explicitly deferred.
-func NewAgentSteps(nodes node.Service, agentPort, tlsCAFile string, logger *slog.Logger) (*AgentSteps, error) {
-	creds, err := credentials.NewClientTLSFromFile(tlsCAFile, "")
+// for verifying it; clientCertFile/clientKeyFile is nebula-api's own
+// client identity, presented to the agent's now-mandatory mTLS (Phase
+// 18 closes the "mTLS later" deferral from Phase 10/spec section 51).
+func NewAgentSteps(nodes node.Service, agentPort, tlsCAFile, clientCertFile, clientKeyFile string, logger *slog.Logger) (*AgentSteps, error) {
+	serverCAPEM, err := os.ReadFile(tlsCAFile)
 	if err != nil {
-		return nil, fmt.Errorf("load agent tls ca file: %w", err)
+		return nil, fmt.Errorf("read agent tls ca file: %w", err)
 	}
-	return &AgentSteps{nodes: nodes, agentPort: agentPort, creds: creds, logger: logger}, nil
+	serverCAs := x509.NewCertPool()
+	if !serverCAs.AppendCertsFromPEM(serverCAPEM) {
+		return nil, fmt.Errorf("parse agent tls ca file %s: no certificates found", tlsCAFile)
+	}
+
+	clientCert, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert: %w", err)
+	}
+
+	creds := credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		RootCAs:      serverCAs,
+	})
+	return &AgentSteps{nodes: nodes, agentPort: agentPort, creds: creds, breakers: newCircuitBreakers(), logger: logger}, nil
 }
 
 // dial opens a short-lived connection to nodeID's agent — matches the
 // prior HTTP client's per-call simplicity, no connection-pooling this
-// phase doesn't need.
+// phase doesn't need. Checks the per-node circuit breaker first (spec
+// section 72) — a node that's failed circuitBreakerFailureThreshold
+// times in a row fails immediately here rather than paying dial + the
+// full callTimeout again on a node that's very likely still down.
 func (a *AgentSteps) dial(ctx context.Context, nodeID string) (agentpb.NebulaAgentClient, func(), error) {
+	if !a.breakers.allow(nodeID) {
+		return nil, nil, ErrCircuitOpen
+	}
+
 	n, err := a.nodes.Get(ctx, nodeID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve node %s: %w", nodeID, err)
@@ -68,7 +94,9 @@ func (a *AgentSteps) dial(ctx context.Context, nodeID string) (agentpb.NebulaAge
 	return agentpb.NewNebulaAgentClient(conn), func() { conn.Close() }, nil
 }
 
-func (a *AgentSteps) CreateVM(ctx context.Context, instanceID, nodeID string, spec InstanceSpec) error {
+func (a *AgentSteps) CreateVM(ctx context.Context, instanceID, nodeID string, spec InstanceSpec) (err error) {
+	defer func() { a.breakers.recordResult(nodeID, err) }()
+
 	client, closeConn, err := a.dial(ctx, nodeID)
 	if err != nil {
 		return err
@@ -87,7 +115,9 @@ func (a *AgentSteps) CreateVM(ctx context.Context, instanceID, nodeID string, sp
 	return nil
 }
 
-func (a *AgentSteps) DeleteVM(ctx context.Context, instanceID, nodeID string) error {
+func (a *AgentSteps) DeleteVM(ctx context.Context, instanceID, nodeID string) (err error) {
+	defer func() { a.breakers.recordResult(nodeID, err) }()
+
 	client, closeConn, err := a.dial(ctx, nodeID)
 	if err != nil {
 		return err
@@ -104,7 +134,9 @@ func (a *AgentSteps) DeleteVM(ctx context.Context, instanceID, nodeID string) er
 	return nil
 }
 
-func (a *AgentSteps) StartVM(ctx context.Context, instanceID, nodeID string) error {
+func (a *AgentSteps) StartVM(ctx context.Context, instanceID, nodeID string) (err error) {
+	defer func() { a.breakers.recordResult(nodeID, err) }()
+
 	client, closeConn, err := a.dial(ctx, nodeID)
 	if err != nil {
 		return err
@@ -123,7 +155,9 @@ func (a *AgentSteps) StartVM(ctx context.Context, instanceID, nodeID string) err
 
 // StopVM is the CLI-driven (spec section 49's "nebula instance stop")
 // counterpart to StartVM — same dial/call/log shape, different RPC.
-func (a *AgentSteps) StopVM(ctx context.Context, instanceID, nodeID string) error {
+func (a *AgentSteps) StopVM(ctx context.Context, instanceID, nodeID string) (err error) {
+	defer func() { a.breakers.recordResult(nodeID, err) }()
+
 	client, closeConn, err := a.dial(ctx, nodeID)
 	if err != nil {
 		return err
@@ -147,7 +181,9 @@ func (a *AgentSteps) StopVM(ctx context.Context, instanceID, nodeID string) erro
 // TLS-gRPC dial logic the VM steps use; these just call the disk RPCs
 // (spec section 34, Phase 13) over the same connection shape.
 
-func (a *AgentSteps) CreateDiskFile(ctx context.Context, nodeID, diskID string, sizeGB int) (string, error) {
+func (a *AgentSteps) CreateDiskFile(ctx context.Context, nodeID, diskID string, sizeGB int) (path string, err error) {
+	defer func() { a.breakers.recordResult(nodeID, err) }()
+
 	client, closeConn, err := a.dial(ctx, nodeID)
 	if err != nil {
 		return "", err
@@ -165,7 +201,9 @@ func (a *AgentSteps) CreateDiskFile(ctx context.Context, nodeID, diskID string, 
 	return resp.GetPath(), nil
 }
 
-func (a *AgentSteps) DeleteDiskFile(ctx context.Context, nodeID, diskID string) error {
+func (a *AgentSteps) DeleteDiskFile(ctx context.Context, nodeID, diskID string) (err error) {
+	defer func() { a.breakers.recordResult(nodeID, err) }()
+
 	client, closeConn, err := a.dial(ctx, nodeID)
 	if err != nil {
 		return err
@@ -182,7 +220,9 @@ func (a *AgentSteps) DeleteDiskFile(ctx context.Context, nodeID, diskID string) 
 	return nil
 }
 
-func (a *AgentSteps) ResizeDiskFile(ctx context.Context, nodeID, diskID string, newSizeGB int) error {
+func (a *AgentSteps) ResizeDiskFile(ctx context.Context, nodeID, diskID string, newSizeGB int) (err error) {
+	defer func() { a.breakers.recordResult(nodeID, err) }()
+
 	client, closeConn, err := a.dial(ctx, nodeID)
 	if err != nil {
 		return err

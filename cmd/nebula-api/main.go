@@ -24,6 +24,7 @@ import (
 	"github.com/milosursulovic/nebula/internal/node"
 	"github.com/milosursulovic/nebula/internal/outbox"
 	"github.com/milosursulovic/nebula/internal/provisioning"
+	"github.com/milosursulovic/nebula/internal/ratelimit"
 	"github.com/milosursulovic/nebula/internal/scheduler"
 	"github.com/milosursulovic/nebula/internal/storage"
 	"github.com/milosursulovic/nebula/internal/tracing"
@@ -70,15 +71,25 @@ func run(logger *slog.Logger) error {
 	authRepo := auth.NewRepository(pool)
 	authSvc := auth.NewService(authRepo, tokens)
 
+	// Phase 18/spec section 40's exact shutdown sequence (stop requests ->
+	// stop Kafka consumers -> stop workers -> flush telemetry -> close
+	// database) needs each stage independently stoppable, in that order —
+	// a single shared ctx (as every background loop used before this)
+	// cancels everything at once on a signal, not sequenced. workerCtx
+	// covers the job pool + node monitor; kafkaCtx (below) covers the
+	// outbox publisher + audit consumer.
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
+	var wgWorkers sync.WaitGroup
+
 	nodeRepo := node.NewRepository(pool)
 	nodeSvc := node.NewService(nodeRepo, logger)
 	nodeMonitor := node.NewMonitor(nodeRepo, logger)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	wgWorkers.Add(1)
 	go func() {
-		defer wg.Done()
-		nodeMonitor.Run(ctx)
+		defer wgWorkers.Done()
+		nodeMonitor.Run(workerCtx)
 	}()
 
 	instanceRepo := instance.NewRepository(pool)
@@ -93,7 +104,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	networkSteps := provisioning.NewNetworkSteps(networkSvc)
-	agentSteps, err := provisioning.NewAgentSteps(nodeSvc, cfg.AgentPort, cfg.AgentTLSCAFile, logger)
+	agentSteps, err := provisioning.NewAgentSteps(nodeSvc, cfg.AgentPort, cfg.AgentTLSCAFile, cfg.AgentClientTLSCertFile, cfg.AgentClientTLSKeyFile, logger)
 	if err != nil {
 		return err
 	}
@@ -113,10 +124,10 @@ func run(logger *slog.Logger) error {
 	jobPool := job.NewPool(jobRepo, logger, cfg.WorkerCount)
 	jobPool.RegisterHandler(job.TypeCreateInstance, createInstanceJobHandler(saga))
 
-	wg.Add(1)
+	wgWorkers.Add(1)
 	go func() {
-		defer wg.Done()
-		jobPool.Run(ctx)
+		defer wgWorkers.Done()
+		jobPool.Run(workerCtx)
 	}()
 
 	kafkaWriter := &kafka.Writer{
@@ -152,29 +163,46 @@ func run(logger *slog.Logger) error {
 	defer kafkaReader.Close()
 	prometheus.MustRegister(&kafkaLagCollector{reader: kafkaReader})
 
+	kafkaCtx, cancelKafka := context.WithCancel(context.Background())
+	defer cancelKafka()
+	var wgKafka sync.WaitGroup
+
 	outboxRepo := outbox.NewRepository(pool)
 	outboxPublisher := outbox.NewPublisher(outboxRepo, kafkaWriter, logger)
 
-	wg.Add(1)
+	wgKafka.Add(1)
 	go func() {
-		defer wg.Done()
-		outboxPublisher.Run(ctx)
+		defer wgKafka.Done()
+		outboxPublisher.Run(kafkaCtx)
 	}()
 
 	auditRepo := audit.NewRepository(pool)
 	auditConsumer := audit.NewConsumer(auditRepo, kafkaReader, logger)
 
-	wg.Add(1)
+	wgKafka.Add(1)
 	go func() {
-		defer wg.Done()
-		auditConsumer.Run(ctx)
+		defer wgKafka.Done()
+		auditConsumer.Run(kafkaCtx)
 	}()
 
-	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, networkSvc, storageSvc, agentSteps.DeleteVM, networkSteps.DeleteNetwork, agentSteps.StartVM, agentSteps.StopVM, logger, cfg.NodeBootstrapSecret)
+	limiter := ratelimit.NewRedisLimiter(cfg.RedisAddr)
+
+	srv := api.NewServer(":"+cfg.HTTPPort, pool, authSvc, tokens, nodeSvc, instanceSvc, jobSvc, networkSvc, storageSvc, agentSteps.DeleteVM, networkSteps.DeleteNetwork, agentSteps.StartVM, agentSteps.StopVM, limiter, cfg.TLSCertFile != "", logger, cfg.NodeBootstrapSecret)
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("nebula-api listening", "addr", srv.Addr)
+		// TLS stays opt-in (Phase 18): unset by default, so every
+		// existing plain-HTTP curl example and the CLI's default URL
+		// keep working unchanged. Set both env vars to serve HTTPS
+		// instead — see deployments/certs/README.md.
+		if cfg.TLSCertFile != "" {
+			logger.Info("nebula-api listening", "addr", srv.Addr, "tls", true)
+			if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+			return
+		}
+		logger.Info("nebula-api listening", "addr", srv.Addr, "tls", false)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -190,11 +218,37 @@ func run(logger *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Spec section 40's exact sequence. srv/pool/kafkaWriter/kafkaReader/tp
+	// also have `defer`d closes above as a safety net for any early-return
+	// error path before this point ever runs — all four are safe to close
+	// twice (idempotent), so calling them explicitly here too, in order,
+	// costs nothing and is what makes the log sequence below actually
+	// true rather than "whatever order Go's defer stack happens to close
+	// things in."
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
+	logger.Info("http server stopped")
 
-	wg.Wait()
+	cancelKafka()
+	wgKafka.Wait()
+	logger.Info("kafka consumers stopped")
+
+	cancelWorkers()
+	wgWorkers.Wait()
+	logger.Info("workers stopped")
+
+	if err := tp.Shutdown(shutdownCtx); err != nil {
+		logger.Error("tracer provider shutdown failed", "error", err)
+	} else {
+		logger.Info("telemetry flushed")
+	}
+
+	kafkaWriter.Close()
+	kafkaReader.Close()
+	pool.Close()
+	logger.Info("database closed")
+
 	logger.Info("nebula-api stopped cleanly")
 	return nil
 }

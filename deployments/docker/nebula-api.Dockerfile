@@ -8,5 +8,7 @@ RUN CGO_ENABLED=0 go build -o /out/nebula-api ./cmd/nebula-api
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /out/nebula-api /usr/local/bin/nebula-api
 COPY deployments/certs/nebula-agent.crt /etc/nebula/tls/
+COPY deployments/certs/nebula-api-client.crt deployments/certs/nebula-api-client.key /etc/nebula/tls/
+COPY deployments/certs/nebula-api.crt deployments/certs/nebula-api.key /etc/nebula/tls/
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/nebula-api"]

@@ -2,8 +2,12 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
+	"os"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -34,17 +38,35 @@ type grpcServer struct {
 	disks      *DiskStore
 }
 
-// NewServer builds nebula-agent's TLS-enabled gRPC server, listening on
-// addr. certFile/keyFile are the agent's own server certificate (spec
-// section 64: "Implement TLS" — server-authenticated only; mTLS, client
-// cert verification, is explicitly "later"). Server reflection is
-// registered so grpcurl can introspect the service without needing the
-// .proto file on hand.
-func NewServer(addr, certFile, keyFile string, hypervisor Hypervisor, disks *DiskStore) (*grpc.Server, net.Listener, error) {
-	creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
+// NewServer builds nebula-agent's mTLS-enabled gRPC server, listening on
+// addr. certFile/keyFile are the agent's own server certificate;
+// clientCAFile is the caller's (nebula-api's) client certificate, trusted
+// as its own CA — same "self-signed cert is its own trust anchor" dev
+// pattern as the server side. Phase 18 closes the mTLS deferral spec
+// section 51 called out ("Use mTLS later") — every caller now must
+// present clientCAFile's exact certificate, not just verify the server's.
+// Server reflection is registered so grpcurl can introspect the service
+// without needing the .proto file on hand.
+func NewServer(addr, certFile, keyFile, clientCAFile string, hypervisor Hypervisor, disks *DiskStore) (*grpc.Server, net.Listener, error) {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("load server cert: %w", err)
 	}
+
+	clientCAPEM, err := os.ReadFile(clientCAFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read client ca file: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(clientCAPEM) {
+		return nil, nil, fmt.Errorf("parse client ca file %s: no certificates found", clientCAFile)
+	}
+
+	creds := credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    clientCAs,
+	})
 
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
