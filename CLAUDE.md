@@ -104,23 +104,37 @@ real KVM domains via `make test-libvirt`. Compose still defaults to
 scope-boundary note in its commit message for why (no `/dev/kvm`
 passthrough into the container this phase).
 
-**Kafka coordinator-stall issue, narrowed (Phase 16):** the audit
-consumer's `"Group Coordinator Not Available"` stall (reproduced across
-Phases 8/9/10, previously undiagnosed) turns out to correlate with
-**cold-start** conditions — a genuinely fresh `compose up` where the
-topic/consumer-group don't exist on the broker yet. Phase 16's chaos
-testing killed and restarted an already-running Kafka broker (topic and
-group metadata already existed) three separate times and measured
-**~17-33 second** recovery each time (outbox publisher resumed in ~17s,
-audit consumer fully caught up in ~33s) — nothing like the previously
-observed multi-minute stalls. So: a Kafka **restart** self-heals quickly;
-a **first-ever** topic/group creation on a brand new broker is the
-scenario that's still slow and still not root-caused. If a future phase
-needs to actually fix the cold-start case, reproduce it specifically
-(fresh volumes, `docker compose up` from nothing) rather than a
-kill/restart of an already-initialized broker — this phase's timing data
-rules out "consumer never retries the coordinator lookup" as the cause,
-since a restart clearly does retry and recover fine.
+**Kafka coordinator-stall issue — root-caused and fixed** (post-Phase-18
+cleanup). Phase 16 first narrowed it to cold-start conditions (a Kafka
+**restart** self-heals in ~17-33s; a genuinely fresh `compose up`, topic/
+group never created before, was the scenario that stayed slow). A
+from-scratch repro (`docker compose down -v`, fresh Postgres+Kafka
+volumes) found it wasn't actually "slow" — it was **permanently stalled**,
+zero recovery observed over 38+ minutes. Root cause, confirmed against
+`segmentio/kafka-go@v0.4.51` source and broker logs: the audit consumer's
+JoinGroup/SyncGroup can complete a few *milliseconds* before the
+`nebula-events` topic finishes auto-creating on a brand-new broker.
+kafka-go's own `assignTopicPartitions` treats a not-yet-existing topic as
+"0 partitions assigned, not an error" and relies on an internal topic
+watcher to trigger a rebalance once the topic appears — but that watcher
+only runs when `ReaderConfig.WatchPartitionChanges` is `true`, which
+`cmd/nebula-api/main.go`'s reader config never set. Losing that race left
+the group topic-less *permanently*, not just briefly — explaining the
+"sometimes several minutes, sometimes fine" variance every earlier phase
+observed: it was never a graduated recovery curve, it was a coin-flip
+race, won or lost. Fixed by setting `WatchPartitionChanges: true` on the
+reader config. Re-verified against another fresh-volume repro: the same
+race still fires (`"Problem getting partitions during startup ... Unknown
+Topic Or Partition"`, expected) but now self-heals silently with no
+restart needed — a real instance created 9 minutes later had all 3 of
+its outbox events land in `audit_logs` within 1-2 seconds, not 38+
+minutes. One expected side effect: `nebula-api`'s bounded Kafka-reader
+close (`closeWithTimeout`, 2s) now sometimes actually logs its "taking
+longer than expected" warning during shutdown — the extra topic-watcher
+goroutine `WatchPartitionChanges` spawns takes a little longer to unwind
+than before. Not a hang (shutdown still completes cleanly), just means
+that warning path is now genuinely exercised sometimes rather than dead
+code — nothing to fix.
 
 ## Workflow for a new phase
 
@@ -298,15 +312,15 @@ since a restart clearly does retry and recover fine.
   Hub — only fully-qualified patch tags (`1.62.0`, `1.63.0`, ...) plus
   `latest`. Compose pins `1.62.0`. If bumping, check the actual published
   tag list first, not just the minor version scheme other images use.
-- `GET /api/v1/networks` (list) has always returned bare `{id, name}` —
-  no `cidr`/`gateway` — while `GET /api/v1/networks/{id}` (get) returns
-  those via a nested `subnets[]` (`handleListNetworks` passes `nil`
-  subnets to `newNetworkResponse`, `handleGetNetwork` doesn't). Pre-
-  existing since Phase 12, surfaced by Phase 15's CLI (`nebula network
-  list`'s CIDR/GATEWAY columns always render `-`) but out of that phase's
-  scope to fix. Worth a real fix next time `internal/network`/
-  `pkg/api/network_handlers.go` gets touched — `List` would need to join
-  subnets same as `Get` does.
+- **Fixed** (post-Phase-18 cleanup): `GET /api/v1/networks` (list) used
+  to always return bare `{id, name}` — no `cidr`/`gateway` — while
+  `GET /api/v1/networks/{id}` (get) already returned those via a nested
+  `subnets[]`. `handleListNetworks` now fetches each network's subnets
+  too (`pkg/api/network_handlers.go`) — a plain per-network
+  `SubnetsByNetwork` call in the loop, not a repository-level join;
+  fine at this list's actual cardinality (`SUPER_ADMIN`-only, platform
+  infra, never many rows). `nebula network list`'s CIDR/GATEWAY columns
+  are populated now, not `-`.
 - A `kill -9`/`SIGKILL` of `nebula-api` mid-`CREATE_INSTANCE`-saga (this
   project has no separate worker binary — job dispatch runs in-process
   inside `nebula-api`) leaves the instance at `PROVISIONING`, a status
@@ -370,16 +384,22 @@ since a restart clearly does retry and recover fine.
   agent's back. Not a bug — just a real interaction between two
   independent reliability mechanisms worth knowing about before
   re-testing either one.
-- `nebula-api`'s graceful shutdown (Phase 18's sequenced version)
-  consistently shows a ~5s gap between `"telemetry flushed"` and
-  `"database closed"` — the sequence/order is correct (verified via
-  exact log timestamps), just slower than the other stages by a few
-  seconds, most likely `kafka.Reader.Close()` waiting out something
-  internal to `segmentio/kafka-go`'s reader shutdown rather than an
-  actual hang (the process does exit cleanly, just not instantly). Not
-  chased further this phase (shutdown *order* was the spec ask, not
-  shutdown *speed*) — worth a look if shutdown latency ever actually
-  matters for something (e.g. a tight rolling-deploy budget).
+- **Root-caused and fixed** (post-Phase-18 cleanup): the ~5s gap Phase 18
+  observed between `"telemetry flushed"` and `"database closed"` during
+  shutdown is `kafka.Reader.Close()` (a consumer-group reader) performing
+  a real, synchronous `LeaveGroup` handshake — `segmentio/kafka-go`'s
+  `ConsumerGroup.leaveGroup` opens a *fresh* connection, does a
+  `FindCoordinator` round trip, then the leave request itself
+  (`consumergroup.go`), all bounded by the library's own private
+  `defaultTimeout = 5 * time.Second` (not exposed via `ReaderConfig` to
+  tune). That handshake only helps *other* consumer-group members
+  rebalance faster — nothing about our own shutdown's correctness
+  depends on it finishing. `cmd/nebula-api/main.go`'s `closeWithTimeout`
+  now runs `kafkaWriter.Close()`/`kafkaReader.Close()` in the background
+  and waits at most 2s for either, logging a warning and moving on
+  (rather than blocking) if either is still running past that — `Close()`
+  still completes in the background regardless, harmless for a process
+  that's exiting anyway.
 - Grafana's host port `3000` isn't reserved by anything in this repo —
   on this particular dev machine it collided with an unrelated
   `pingvin-share-x` container already bound to `3000` (Phase 14
