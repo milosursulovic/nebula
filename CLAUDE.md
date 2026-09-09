@@ -82,14 +82,20 @@ full section.
 | 15 | CLI (`nebula` binary; tenant list, node drain, instance start/stop endpoints) | `73db331` |
 | 16 | Failure recovery (crashed-mid-saga self-healing, agent hostname reclaim, chaos-tested) | `48ff1cd` |
 | 17 | Performance (benchmarks + pprof for all 6 spec targets, 2 real fixes found) | `bb6afaf` |
+| 18 | Production hardening (mTLS, opt-in API TLS, rate limiting, circuit breaker, sequenced shutdown, security headers, resource limits) | `240a04a` |
 
-**Next: Phase 18 — Production Hardening** (spec section 72/line 2875).
-Linux
-bridge/veth/network-namespace device management (spec section 33) and
-real libvirt `<disk>`/`<interface>` device attachment both stay deferred
-— see the Phase 12/13 plans' own scope-boundary notes for why (no
-`CAP_NET_ADMIN` in this sandbox for the former; no bootable OS/image
-pipeline yet to make either meaningfully testable).
+**This was the last of the 18 numbered development phases** (spec
+section 55). What comes next per the spec is architecture-document-only
+territory — section 73 (Future Microservice Extraction) and section 74
+(Kubernetes — Final Stage) describe where the system *could* go, not a
+Phase 19 to build. Section 76's "Definition of Done" checklist is now
+fully satisfied. Linux bridge/veth/network-namespace device management
+(spec section 33) and real libvirt `<disk>`/`<interface>` device
+attachment both stay deferred — see the Phase 12/13 plans' own
+scope-boundary notes for why (no `CAP_NET_ADMIN` in this sandbox for the
+former; no bootable OS/image pipeline yet to make either meaningfully
+testable) — these remain the project's only genuinely open gaps if
+picking this back up.
 
 **This sandbox has real libvirtd/qemu-kvm** (`libvirt-dev` installed
 Phase 11) — `LibvirtHypervisor` isn't theoretical, it's proven against
@@ -346,6 +352,34 @@ since a restart clearly does retry and recover fine.
   host-side Kafka access, add a proper dual-listener config
   (`PLAINTEXT_HOST` on a separate port) instead of re-solving this
   ad hoc each time.
+- Testing the per-node circuit breaker (`internal/provisioning/
+  circuit_breaker.go`, Phase 18) by stopping `nebula-agent` and creating
+  instances doesn't reliably reach the breaker at all in this single-
+  node compose topology: the node monitor also loses that node's
+  heartbeats and demotes it out of scheduling eligibility (`>30s
+  OFFLINE`, `internal/scheduler` only considers `ONLINE` nodes) well
+  before 5 consecutive gRPC failures could accumulate — most creates
+  after that point fail at `"schedule: no node has sufficient
+  capacity"` and never touch the agent-dial path at all. To actually
+  exercise the breaker, fire a burst of requests in the few seconds
+  right after stopping the agent (while the node is still `ONLINE`/
+  `DEGRADED`), not spread out over time. Verified this way in Phase 18:
+  5 real failures logged, the 6th+ short-circuited with
+  `"circuit breaker open"` with no network call attempted, correct
+  half-open-then-reopen behavior after cooldown, closes again once the
+  agent's back. Not a bug — just a real interaction between two
+  independent reliability mechanisms worth knowing about before
+  re-testing either one.
+- `nebula-api`'s graceful shutdown (Phase 18's sequenced version)
+  consistently shows a ~5s gap between `"telemetry flushed"` and
+  `"database closed"` — the sequence/order is correct (verified via
+  exact log timestamps), just slower than the other stages by a few
+  seconds, most likely `kafka.Reader.Close()` waiting out something
+  internal to `segmentio/kafka-go`'s reader shutdown rather than an
+  actual hang (the process does exit cleanly, just not instantly). Not
+  chased further this phase (shutdown *order* was the spec ask, not
+  shutdown *speed*) — worth a look if shutdown latency ever actually
+  matters for something (e.g. a tight rolling-deploy budget).
 - Grafana's host port `3000` isn't reserved by anything in this repo —
   on this particular dev machine it collided with an unrelated
   `pingvin-share-x` container already bound to `3000` (Phase 14
