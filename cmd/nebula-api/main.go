@@ -157,8 +157,24 @@ func run(logger *slog.Logger) error {
 		// trail must not silently skip events published before the
 		// consumer happened to finish joining the group.
 		StartOffset: kafka.FirstOffset,
-		Logger:      kafkaDebugLogger(logger),
-		ErrorLogger: kafkaErrorLogger(logger),
+		// Root cause of the long-standing "audit consumer stalls
+		// indefinitely on a genuinely fresh broker" issue (CLAUDE.md):
+		// on a brand-new broker, this consumer group's JoinGroup/
+		// SyncGroup can complete a few milliseconds BEFORE the
+		// nebula-events topic itself finishes auto-creating (confirmed
+		// via a fresh-volume repro — both events landed ~3ms apart).
+		// kafka-go's own assignTopicPartitions deliberately treats a
+		// not-yet-existing topic as "0 partitions assigned, not an
+		// error" and relies on a topic watcher to trigger a rebalance
+		// once the topic shows up — but that watcher only runs when
+		// WatchPartitionChanges is true, which this never set. Losing
+		// that race left the consumer group topic-less permanently (not
+		// just briefly) until something forced a fresh rejoin (e.g. a
+		// restart) — a narrow startup race, not a graduated slow
+		// recovery, which is why it looked intermittent across phases.
+		WatchPartitionChanges: true,
+		Logger:                kafkaDebugLogger(logger),
+		ErrorLogger:           kafkaErrorLogger(logger),
 	})
 	defer kafkaReader.Close()
 	prometheus.MustRegister(&kafkaLagCollector{reader: kafkaReader})
@@ -244,13 +260,45 @@ func run(logger *slog.Logger) error {
 		logger.Info("telemetry flushed")
 	}
 
-	kafkaWriter.Close()
-	kafkaReader.Close()
+	// kafkaReader.Close() (a consumer-group reader) synchronously performs
+	// a real LeaveGroup handshake — a fresh connection, a FindCoordinator
+	// round trip, then the leave request itself (segmentio/kafka-go's
+	// consumergroup.go) — bounded internally by the library's own private
+	// 5s timeout, not exposed via ReaderConfig for us to tune. Observed
+	// in practice: adds ~5s to shutdown. That handshake is purely an
+	// optimization for other group members' next rebalance, not something
+	// our own shutdown's correctness depends on, so cap how long we wait
+	// for it rather than passing that delay on to whatever's waiting on
+	// this process to exit — Close() still runs to completion in the
+	// background either way.
+	closeWithTimeout(logger, "kafka_writer", kafkaWriter.Close, 2*time.Second)
+	closeWithTimeout(logger, "kafka_reader", kafkaReader.Close, 2*time.Second)
 	pool.Close()
 	logger.Info("database closed")
 
 	logger.Info("nebula-api stopped cleanly")
 	return nil
+}
+
+// closeWithTimeout runs closeFn (a blocking Close() with no context
+// parameter of its own) in the background and waits up to timeout for it
+// — used where a component's Close() can legitimately take a while (see
+// the kafkaReader.Close() call site) but that wait shouldn't hold up the
+// rest of shutdown. closeFn still runs to completion on its own goroutine
+// even if we stop waiting on it — harmless for a process that's exiting.
+func closeWithTimeout(logger *slog.Logger, name string, closeFn func() error, timeout time.Duration) {
+	done := make(chan error, 1)
+	go func() { done <- closeFn() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			logger.Error("close failed", "component", name, "error", err)
+		}
+	case <-time.After(timeout):
+		logger.Warn("close taking longer than expected, continuing shutdown without waiting further",
+			"component", name, "timeout", timeout)
+	}
 }
 
 var kafkaConsumerLagDesc = prometheus.NewDesc(

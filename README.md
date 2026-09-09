@@ -35,7 +35,11 @@ Nomad, and Proxmox. Full design spec: `docs/nebula.pdf`.
   workers → flush telemetry → close the database (each background loop
   now stops on its own independently-cancelled context instead of one
   shared signal context, so the stages are actually sequenced, not
-  simultaneous).
+  simultaneous). Closing the Kafka client connections is bounded to 2s
+  each rather than however long their own internal handshakes take (the
+  consumer-group reader's `LeaveGroup` round trip in particular) — that
+  handshake only helps other group members rebalance faster, nothing
+  about this process's own shutdown depends on it finishing.
 
 **Authentication & RBAC** (`internal/auth/`)
 - JWT access tokens + rotating opaque refresh tokens; bcrypt password

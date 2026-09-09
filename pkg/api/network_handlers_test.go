@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -100,10 +101,20 @@ func TestHandleCreateNetworkInvalidCIDR(t *testing.T) {
 	}
 }
 
+// TestHandleListNetworks also confirms the regression fix for the CLAUDE.md-
+// documented gap: list used to always render blank cidr/gateway (it never
+// fetched subnets at all) while get already did — list now fetches each
+// network's subnets too, same as get.
 func TestHandleListNetworks(t *testing.T) {
 	svc := fakeNetworkService{
 		listFn: func(ctx context.Context) ([]network.Network, error) {
 			return []network.Network{{ID: "network-1", Name: "production"}}, nil
+		},
+		subnetsByNetworkFn: func(ctx context.Context, networkID string) ([]network.Subnet, error) {
+			if networkID != "network-1" {
+				t.Fatalf("unexpected networkID: %q", networkID)
+			}
+			return []network.Subnet{{ID: "subnet-1", CIDR: "10.20.0.0/24", Gateway: "10.20.0.1"}}, nil
 		},
 	}
 	srv, tokens := newNetworkTestServer(svc)
@@ -119,7 +130,28 @@ func TestHandleListNetworks(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(resp) != 1 || resp[0].Name != "production" {
-		t.Errorf("unexpected response: %+v", resp)
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if len(resp[0].Subnets) != 1 || resp[0].Subnets[0].CIDR != "10.20.0.0/24" || resp[0].Subnets[0].Gateway != "10.20.0.1" {
+		t.Errorf("expected subnets to be populated, got: %+v", resp[0].Subnets)
+	}
+}
+
+func TestHandleListNetworksSubnetLookupFails(t *testing.T) {
+	svc := fakeNetworkService{
+		listFn: func(ctx context.Context) ([]network.Network, error) {
+			return []network.Network{{ID: "network-1", Name: "production"}}, nil
+		},
+		subnetsByNetworkFn: func(ctx context.Context, networkID string) ([]network.Subnet, error) {
+			return nil, errors.New("db unavailable")
+		},
+	}
+	srv, tokens := newNetworkTestServer(svc)
+
+	rec := doJSON(t, srv, http.MethodGet, "/api/v1/networks/", nil, superAdminAuthHeader(t, tokens))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
 }
 

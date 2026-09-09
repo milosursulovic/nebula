@@ -80,6 +80,13 @@ func handleCreateNetwork(svc network.Service) http.HandlerFunc {
 	}
 }
 
+// handleListNetworks fetches each network's subnets too (same shape as
+// handleGetNetwork) — it used to pass nil, which rendered every
+// cidr/gateway as blank in any client that only ever calls list (the
+// CLI's `nebula network list` always showed `-`). SUPER_ADMIN-only,
+// platform-infrastructure-scale list — one extra query per network is a
+// non-issue at that cardinality, so this stays a plain loop rather than
+// a repository-level join.
 func handleListNetworks(svc network.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		networks, err := svc.List(r.Context())
@@ -90,7 +97,12 @@ func handleListNetworks(svc network.Service) http.HandlerFunc {
 
 		resp := make([]networkResponse, 0, len(networks))
 		for _, n := range networks {
-			resp = append(resp, newNetworkResponse(n, nil))
+			subnets, err := svc.SubnetsByNetwork(r.Context(), n.ID)
+			if err != nil {
+				writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to list networks")
+				return
+			}
+			resp = append(resp, newNetworkResponse(n, subnets))
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
